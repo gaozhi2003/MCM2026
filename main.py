@@ -240,66 +240,91 @@ def main():
     long_df["elimination_prob"] = elimination_model.predict(long_df[feature_cols])
     long_df["elimination_prob"] = long_df["elimination_prob"].clip(0, 1)  # 限制在 0-1
     
-    # 根据淘汰概率反推观众投票比例：存活概率越高 = 观众投票越多
-    print("- 基于淘汰概率计算观众投票比例...")
-    long_df["survival_prob"] = 1 - long_df["elimination_prob"]
-    long_df["audience_share"] = long_df.groupby(["season", "week"])["survival_prob"].transform(
-        lambda s: s / (s.sum() + 1e-10)  # softmax 归一化
-    )
-    
-    # 直接从audience_share推导排名（分数越高排名越前）
-    long_df["audience_rank_score"] = long_df["audience_share"]
-    long_df["audience_rank"] = long_df.groupby(["season", "week"])["audience_rank_score"].rank(
-        ascending=False, method="min"
-    )
-
-    # 百分比结合法：综合得分 = 评委百分比 + 观众百分比
+    # 先计算评委得分百分比
     long_df["judge_share"] = long_df.groupby(["season", "week"])["judge_total_score"].transform(
         lambda s: s / (s.sum() + 1e-10)
     )
-    long_df["combined_share"] = long_df["judge_share"] + long_df["audience_share"]
-
-    # 排名结合法：综合排名 = 评委排名 + 观众排名
+    
+    # 根据淘汰概率反推观众投票比例
+    # 逻辑（百分比结合法）：
+    # 1. combined_share = judge_share + audience_share
+    # 2. judge_share 周内和为1，audience_share 周内和为1，所以 combined_share 周内和为2
+    # 3. 淘汰概率高 → combined_share 低
+    # 4. 用 survival_prob 归一化后乘以2来估计 combined_share
+    print("- 基于淘汰概率和评委得分反推观众投票比例...")
+    long_df["survival_prob"] = 1 - long_df["elimination_prob"]
+    
+    # 将存活概率归一化并缩放到和为2（对应 combined_share 的周内和）
+    long_df["estimated_combined_share"] = long_df.groupby(["season", "week"])["survival_prob"].transform(
+        lambda s: 2.0 * s / (s.sum() + 1e-10)
+    )
+    
+    # 反推观众投票比例：audience_share = estimated_combined_share - judge_share
+    long_df["audience_share_raw"] = long_df["estimated_combined_share"] - long_df["judge_share"]
+    
+    def normalize_audience_share(raw_series):
+        raw = raw_series.values
+        # 平移使最小值为0
+        shifted = raw - raw.min()
+        total = shifted.sum()
+        if total > 1e-10:
+            return shifted / total
+        else:
+            # 如果全0，则均匀分配
+            return np.ones(len(raw)) / len(raw)
+    
+    long_df["audience_share"] = long_df.groupby(["season", "week"])["audience_share_raw"].transform(normalize_audience_share)
+    
+    # 排名法：先计算评委排名（1为最高分）
     long_df["judge_rank"] = long_df.groupby(["season", "week"])["judge_total_score"].rank(
         ascending=False, method="min"
     )
+
+    # 排名法解耦：由淘汰概率反推综合排名得分
+    # 1. 将 elimination_prob 归一化到和为1
+    # 2. 乘以 n(n+1) 得到综合排名得分（淘汰概率越高，综合排名得分越高，即排名越差）
+    def calc_combined_rank_score(group):
+        elim_prob = group["elimination_prob"].values
+        n = len(group)
+        # 归一化并缩放到 n(n+1)
+        normalized = elim_prob / (elim_prob.sum() + 1e-10)
+        return normalized * n * (n + 1)
+    
+    long_df["combined_rank_score"] = long_df.groupby(["season", "week"]).apply(
+        lambda g: pd.Series(calc_combined_rank_score(g), index=g.index)
+    ).reset_index(level=[0, 1], drop=True)
+
+    # 观众排名得分 = 综合排名得分 - 评委排名
+    long_df["audience_rank_score"] = long_df["combined_rank_score"] - long_df["judge_rank"]
+
+    # 将观众排名得分映射到 1..n 的排名（1 为最高）
+    long_df["audience_rank"] = long_df.groupby(["season", "week"])["audience_rank_score"].rank(
+        ascending=True, method="min"
+    )
+
+    # 百分比结合法：综合得分 = 评委百分比 + 观众百分比
+    long_df["combined_share"] = long_df["judge_share"] + long_df["audience_share"]
+
+    # 排名结合法：综合排名 = 评委排名 + 观众排名
     long_df["combined_rank"] = long_df["judge_rank"] + long_df["audience_rank"]
 
-    # 分别用百分比法和排名法预测淘汰（所有赛季）
-    print("- 根据百分比法/排名法分别预测淘汰...")
-    def mark_top_n_eliminated(group):
-        """分别标记该周综合得分最低的N个人（百分比法/排名法）"""
+    # 基于淘汰概率预测淘汰（所有赛季）
+    print("- 根据淘汰概率预测淘汰...")
+    def mark_top_n_eliminated_by_prob(group):
+        """标记该周淘汰概率最高的N个人"""
         n = group["n_eliminated"].iloc[0]
         if n == 0:
-            group["pred_eliminated_share"] = 0
-            group["pred_eliminated_rank"] = 0
+            group["pred_eliminated"] = 0
             return group
-        group["pred_eliminated_share"] = 0
-        group["pred_eliminated_rank"] = 0
-        # 百分比法：综合百分比越低越危险
-        bottom_share_idx = group.nsmallest(int(n), "combined_share").index
-        # 排名法：综合排名越大越危险
-        bottom_rank_idx = group.nlargest(int(n), "combined_rank").index
-        group.loc[bottom_share_idx, "pred_eliminated_share"] = 1
-        group.loc[bottom_rank_idx, "pred_eliminated_rank"] = 1
+        group["pred_eliminated"] = 0
+        # 淘汰概率越高越危险
+        top_prob_idx = group.nlargest(int(n), "elimination_prob").index
+        group.loc[top_prob_idx, "pred_eliminated"] = 1
         return group
 
-    long_df = long_df.groupby(["season", "week"]).apply(mark_top_n_eliminated).reset_index(drop=True)
+    long_df = long_df.groupby(["season", "week"]).apply(mark_top_n_eliminated_by_prob).reset_index(drop=True)
 
     print("[完成] 观众投票比例和排名已预测")
-
-    # 7. 规则判定（第 28 季附近）
-    print("\n[步骤 7] 赛季规则判定...")
-    rule_engine = Season28PlusRules()
-    rule_results = rule_engine.infer_method_by_elimination(
-        long_df, 
-        long_df["audience_share"], 
-        long_df["audience_rank"]  # 观众投票排名预测
-    )
-    rule_summary = rule_engine.validate_rules(rule_results)
-    print("\n规则判定准确率：")
-    print(rule_summary)
-    
     # 8. 模型评估
     print("\n[步骤 8] 模型评估...")
     
@@ -312,20 +337,14 @@ def main():
     print(f"投票比例范围: [{long_df['audience_share'].min():.4f}, {long_df['audience_share'].max():.4f}]")
     
     print("\n- 淘汰预测准确性")
-    elimination_accuracy_share = (long_df["pred_eliminated_share"] == long_df["is_eliminated"]).mean()
-    elimination_accuracy_rank = (long_df["pred_eliminated_rank"] == long_df["is_eliminated"]).mean()
-    print(f"淘汰预测准确率(百分比法): {elimination_accuracy_share:.4f}")
-    print(f"淘汰预测准确率(排名法): {elimination_accuracy_rank:.4f}")
+    elimination_accuracy = (long_df["pred_eliminated"] == long_df["is_eliminated"]).mean()
+    print(f"淘汰预测准确率: {elimination_accuracy:.4f}")
     
     # 统计按周的预测准确性
-    week_accuracy_share = long_df.groupby(["season", "week"]).apply(
-        lambda g: (g["pred_eliminated_share"] == g["is_eliminated"]).all()
+    week_accuracy = long_df.groupby(["season", "week"]).apply(
+        lambda g: (g["pred_eliminated"] == g["is_eliminated"]).all()
     ).mean()
-    week_accuracy_rank = long_df.groupby(["season", "week"]).apply(
-        lambda g: (g["pred_eliminated_rank"] == g["is_eliminated"]).all()
-    ).mean()
-    print(f"周级别完全正确率(百分比法): {week_accuracy_share:.4f} (整周所有人的淘汰/留任都预测对)")
-    print(f"周级别完全正确率(排名法): {week_accuracy_rank:.4f} (整周所有人的淘汰/留任都预测对)")
+    print(f"周级别完全正确率: {week_accuracy:.4f} (整周所有人的淘汰/留任都预测对)")
     
     # 按淘汰人数类型分析（仅统计有效周）
     valid_mask = long_df["judge_total_score"] > 0
@@ -333,30 +352,23 @@ def main():
     for n in [0, 1, 2, 3, 4]:
         subset = valid_long_df[valid_long_df["n_eliminated"] == n]
         if len(subset) > 0:
-            acc_share = (subset["pred_eliminated_share"] == subset["is_eliminated"]).mean()
-            acc_rank = (subset["pred_eliminated_rank"] == subset["is_eliminated"]).mean()
+            acc = (subset["pred_eliminated"] == subset["is_eliminated"]).mean()
             n_weeks = subset.groupby(["season", "week"]).ngroups
             if n_weeks > 0:
-                print(f"  - {n}人淘汰周 ({n_weeks}周): 百分比法 {acc_share:.4f}, 排名法 {acc_rank:.4f}")
+                print(f"  - {n}人淘汰周 ({n_weeks}周): {acc:.4f}")
     
     # ========== 一致性评估 ==========
     print("\n=== 一致性评估：能否定位淘汰者 ===")
     
     # Hit@2
-    hit_at_2_share = calculate_hit_at_k(long_df, predicted_col="combined_share", k=2, higher_is_worse=False)
-    hit_at_2_rank = calculate_hit_at_k(long_df, predicted_col="combined_rank", k=2, higher_is_worse=True)
-    if not pd.isna(hit_at_2_share.get('hit_rate')):
-        print(f"Hit@2 命中率(百分比法): {hit_at_2_share['hit_rate']:.4f} ({hit_at_2_share['hit_count']:.2f}/{hit_at_2_share['total_eliminations']})")
-    if not pd.isna(hit_at_2_rank.get('hit_rate')):
-        print(f"Hit@2 命中率(排名法): {hit_at_2_rank['hit_rate']:.4f} ({hit_at_2_rank['hit_count']:.2f}/{hit_at_2_rank['total_eliminations']})")
+    hit_at_2 = calculate_hit_at_k(long_df, predicted_col="elimination_prob", k=2, higher_is_worse=True)
+    if not pd.isna(hit_at_2.get('hit_rate')):
+        print(f"Hit@2 命中率: {hit_at_2['hit_rate']:.4f} ({hit_at_2['hit_count']:.2f}/{hit_at_2['total_eliminations']})")
     
     # Hit@3
-    hit_at_3_share = calculate_hit_at_k(long_df, predicted_col="combined_share", k=3, higher_is_worse=False)
-    hit_at_3_rank = calculate_hit_at_k(long_df, predicted_col="combined_rank", k=3, higher_is_worse=True)
-    if not pd.isna(hit_at_3_share.get('hit_rate')):
-        print(f"Hit@3 命中率(百分比法): {hit_at_3_share['hit_rate']:.4f} ({hit_at_3_share['hit_count']:.2f}/{hit_at_3_share['total_eliminations']})")
-    if not pd.isna(hit_at_3_rank.get('hit_rate')):
-        print(f"Hit@3 命中率(排名法): {hit_at_3_rank['hit_rate']:.4f} ({hit_at_3_rank['hit_count']:.2f}/{hit_at_3_rank['total_eliminations']})")
+    hit_at_3 = calculate_hit_at_k(long_df, predicted_col="elimination_prob", k=3, higher_is_worse=True)
+    if not pd.isna(hit_at_3.get('hit_rate')):
+        print(f"Hit@3 命中率: {hit_at_3['hit_rate']:.4f} ({hit_at_3['hit_count']:.2f}/{hit_at_3['total_eliminations']})")
 
     # 按淘汰人数分组的 Hit@k
     def _print_hit_by_n(hit_result: dict, label: str):
@@ -368,47 +380,25 @@ def main():
             print(f"  - {int(n_elim)}人淘汰周 Hit@{label}: {mean_hit:.4f}")
 
     print("- Hit@2 按淘汰人数分组：")
-    print("  百分比法：")
-    _print_hit_by_n(hit_at_2_share, 2)
-    print("  排名法：")
-    _print_hit_by_n(hit_at_2_rank, 2)
+    _print_hit_by_n(hit_at_2, 2)
 
     print("- Hit@3 按淘汰人数分组：")
-    print("  百分比法：")
-    _print_hit_by_n(hit_at_3_share, 3)
-    print("  排名法：")
-    _print_hit_by_n(hit_at_3_rank, 3)
+    _print_hit_by_n(hit_at_3, 3)
     
     # 淘汰边界间隔分布
     print("\n淘汰边界间隔分析:")
     
-    # 百分比法
-    margin_share = analyze_boundary_margin_distribution(long_df, predicted_col="combined_share", by_elimination_count=True)
-    print(f"  百分比法 (combined_share):")
-    print(f"    全局统计:")
-    print(f"      - 均值: {margin_share['mean']:.4f}")
-    print(f"      - 标准差: {margin_share['std']:.4f}")
-    print(f"      - 范围: [{margin_share['min']:.4f}, {margin_share['max']:.4f}]")
-    print(f"      - 中位数: {margin_share['median']:.4f}")
-    print(f"      - 四分位数范围: [{margin_share['q25']:.4f}, {margin_share['q75']:.4f}]")
-    if 'by_elimination_count' in margin_share:
-        print(f"    按淘汰人数分组:")
-        for n_elim, stats in margin_share['by_elimination_count'].items():
-            print(f"      {n_elim}人淘汰 ({stats['count']}周): 均值 {stats['mean']:.4f}, 标准差 {stats['std']:.4f}, 范围 [{stats['min']:.4f}, {stats['max']:.4f}]")
-    
-    # 排名法
-    margin_rank = analyze_boundary_margin_distribution(long_df, predicted_col="combined_rank", higher_is_worse=True, by_elimination_count=True)
-    print(f"  排名法 (combined_rank):")
-    print(f"    全局统计:")
-    print(f"      - 均值: {margin_rank['mean']:.4f}")
-    print(f"      - 标准差: {margin_rank['std']:.4f}")
-    print(f"      - 范围: [{margin_rank['min']:.4f}, {margin_rank['max']:.4f}]")
-    print(f"      - 中位数: {margin_rank['median']:.4f}")
-    print(f"      - 四分位数范围: [{margin_rank['q25']:.4f}, {margin_rank['q75']:.4f}]")
-    if 'by_elimination_count' in margin_rank:
-        print(f"    按淘汰人数分组:")
-        for n_elim, stats in margin_rank['by_elimination_count'].items():
-            print(f"      {n_elim}人淘汰 ({stats['count']}周): 均值 {stats['mean']:.4f}, 标准差 {stats['std']:.4f}, 范围 [{stats['min']:.4f}, {stats['max']:.4f}]")
+    margin = analyze_boundary_margin_distribution(long_df, predicted_col="elimination_prob", higher_is_worse=True, by_elimination_count=True)
+    print(f"  全局统计:")
+    print(f"    - 均值: {margin['mean']:.4f}")
+    print(f"    - 标准差: {margin['std']:.4f}")
+    print(f"    - 范围: [{margin['min']:.4f}, {margin['max']:.4f}]")
+    print(f"    - 中位数: {margin['median']:.4f}")
+    print(f"    - 四分位数范围: [{margin['q25']:.4f}, {margin['q75']:.4f}]")
+    if 'by_elimination_count' in margin:
+        print(f"  按淘汰人数分组:")
+        for n_elim, stats in margin['by_elimination_count'].items():
+            print(f"    {n_elim}人淘汰 ({stats['count']}周): 均值 {stats['mean']:.4f}, 标准差 {stats['std']:.4f}, 范围 [{stats['min']:.4f}, {stats['max']:.4f}]")
    
     # ========== 不确定性分析 ==========
     print("\n=== 不确定性分析：投票区间和方差 ===")
@@ -420,7 +410,7 @@ def main():
         train_mask=share_train_mask,
         vote_share_col="audience_share",
         confidence=0.95,
-        n_bootstrap=200
+        n_bootstrap=500
     )
     print(f"选手级别分析:")
     print(f"  - 平均区间宽度 (95% CI): {uncertainty['mean_interval_width']:.4f}")

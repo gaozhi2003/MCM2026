@@ -69,7 +69,7 @@ def analyze_vote_share_intervals(
     train_mask: pd.Series | None = None,
     vote_share_col: str = "audience_share",
     confidence: float = 0.95,
-    n_bootstrap: int = 200,
+    n_bootstrap: int = 500,
     random_state: int = 42
 ) -> dict:
     """使用模型Bootstrap分析每个选手每周的投票比例不确定性
@@ -95,7 +95,7 @@ def analyze_vote_share_intervals(
     confidence : float
         置信度，默认0.95
     n_bootstrap : int
-        Bootstrap重采样次数，默认200
+        Bootstrap重采样次数，默认500
     random_state : int
         随机种子
     

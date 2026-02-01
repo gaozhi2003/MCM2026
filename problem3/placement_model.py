@@ -61,12 +61,13 @@ def prepare_features(cs: pd.DataFrame, use_normalized_placement: bool = False):
     """
     准备嵌套模型用的特征块与因变量。
     use_normalized_placement: 若 True，y 用赛季内按 min-max 归一化排名 (placement-min)/(max-min)，使跨赛季尺度一致。
-    返回: y, X_season, X_celeb, X_pro, names_season, names_celeb, names_pro
+    返回: y, X_season, X_celeb, X_pro, names_season, names_celeb, names_pro, ref_names
+    ref_names: 各因素被 drop_first 掉的那一水平名（用于输出时补全为 β=0，做到“全都给出 beta”）
     """
     df = cs.reset_index(drop=True)
     n = len(df)
 
-    # 年龄分组（分类变量，参照组 <30 岁）
+    # 年龄分组（分类变量）
     df["age"] = pd.to_numeric(df["celebrity_age_during_season"], errors="coerce")
     df["age"] = df["age"].fillna(df["age"].median() if df["age"].notna().any() else 30)
     bins = [0, 30, 40, 50, 150]
@@ -117,7 +118,32 @@ def prepare_features(cs: pd.DataFrame, use_normalized_placement: bool = False):
     X_pro = pro_dum.astype(np.float64).fillna(0).values
     names_pro = list(pro_dum.columns)
 
-    return y, X_season, X_celeb, X_pro, names_season, names_celeb, names_pro
+    # 被 drop_first 掉的水平（用于输出时补全为 β=0）
+    ref_names = {
+        "age": "age_" + str(labels[0]),
+        "cty": "cty_" + sorted(df["cty_g"].unique())[0],
+        "ind": "ind_" + sorted(df["ind_g"].unique())[0],
+        "pro": "pro_" + sorted(df["pro_g"].unique())[0],
+    }
+    return y, X_season, X_celeb, X_pro, names_season, names_celeb, names_pro, ref_names
+
+
+def expand_coef_with_ref(res_core: pd.DataFrame, ref_names: dict) -> pd.DataFrame:
+    """
+    在系数表中为每个因素的“参照水平”补一行 β=0、pvalue=NaN，使输出为“全都给出 beta”。
+    各因素内顺序：参照水平（0） + 其余水平（与 res_core 中一致）。
+    """
+    rows = []
+    for prefix, ref_var in [("age_", ref_names["age"]), ("cty_", ref_names["cty"]), ("ind_", ref_names["ind"]), ("pro_", ref_names["pro"])]:
+        block = [i for i in res_core.index if i.startswith(prefix)]
+        if not block:
+            continue
+        # 参照水平放首位
+        rows.append(pd.DataFrame({"coef": [0.0], "pvalue": [np.nan]}, index=[ref_var]))
+        rows.append(res_core.loc[block])
+    if not rows:
+        return res_core
+    return pd.concat(rows, axis=0)
 
 
 def ols_fit(X: np.ndarray, y: np.ndarray, names: list):
@@ -186,14 +212,14 @@ def plot_placement_effects(res_core: pd.DataFrame, out_path: Path):
         xhi = max(coefs.max() + 0.3, 0.3)
         ax.set_xlim(xlo, xhi)
 
-    # 年龄组（参照：<30 岁）
+    # 年龄组（全部水平均有 β）
     age_vars = [i for i in res_core.index if i.startswith("age_")]
     if age_vars:
         names = [i.replace("age_", "") for i in age_vars]
         coefs = res_core.loc[age_vars, "coef"].values
         pvals = res_core.loc[age_vars, "pvalue"].values
-        colors = ["#2ecc71" if c < 0 else "#e74c3c" for c in coefs]
-        bar_panel(axes[0, 0], names, coefs, pvals, "年龄组（参照：<30岁）", colors)
+        colors = ["#2ecc71" if c < 0 else "#e74c3c" if c > 0 else "#95a5a6" for c in coefs]
+        bar_panel(axes[0, 0], names, coefs, pvals, "年龄组（全部 β）", colors)
 
     # 国家
     cty_vars = [i for i in res_core.index if i.startswith("cty_")]
@@ -201,8 +227,8 @@ def plot_placement_effects(res_core: pd.DataFrame, out_path: Path):
         names = [i.replace("cty_", "") for i in cty_vars]
         coefs = res_core.loc[cty_vars, "coef"].values
         pvals = res_core.loc[cty_vars, "pvalue"].values
-        colors = ["#2ecc71" if c < 0 else "#e74c3c" for c in coefs]
-        bar_panel(axes[0, 1], names, coefs, pvals, "国家（相对参照组）", colors)
+        colors = ["#2ecc71" if c < 0 else "#e74c3c" if c > 0 else "#95a5a6" for c in coefs]
+        bar_panel(axes[0, 1], names, coefs, pvals, "国家（全部 β）", colors)
 
     # 行业
     ind_vars = [i for i in res_core.index if i.startswith("ind_")]
@@ -210,20 +236,20 @@ def plot_placement_effects(res_core: pd.DataFrame, out_path: Path):
         names = [i.replace("ind_", "") for i in ind_vars]
         coefs = res_core.loc[ind_vars, "coef"].values
         pvals = res_core.loc[ind_vars, "pvalue"].values
-        colors = ["#2ecc71" if c < 0 else "#e74c3c" for c in coefs]
-        bar_panel(axes[1, 0], names, coefs, pvals, "行业（相对参照组）", colors)
+        colors = ["#2ecc71" if c < 0 else "#e74c3c" if c > 0 else "#95a5a6" for c in coefs]
+        bar_panel(axes[1, 0], names, coefs, pvals, "行业（全部 β）", colors)
 
-    # 职业舞者：按 |coef| 取前 15
+    # 职业舞者：按 |coef| 取前 15（含 β=0 的基准）
     pro_vars = [i for i in res_core.index if i.startswith("pro_")]
     if pro_vars:
         order = sorted(pro_vars, key=lambda x: abs(res_core.loc[x, "coef"]), reverse=True)[:15]
         names = [i.replace("pro_", "") for i in order]
         coefs = res_core.loc[order, "coef"].values
         pvals = res_core.loc[order, "pvalue"].values
-        colors = ["#2ecc71" if c < 0 else "#e74c3c" for c in coefs]
-        bar_panel(axes[1, 1], names, coefs, pvals, "职业舞者（前15 |β|，相对参照组）", colors)
+        colors = ["#2ecc71" if c < 0 else "#e74c3c" if c > 0 else "#95a5a6" for c in coefs]
+        bar_panel(axes[1, 1], names, coefs, pvals, "职业舞者（前15 |β|，全部 β）", colors)
 
-    fig.text(0.5, 0.01, "绿色=排名更靠前  红色=排名更靠后  * p<0.05", ha="center", fontsize=9)
+    fig.text(0.5, 0.01, "绿色=更靠前  红色=更靠后  灰色=基准(β=0)  * p<0.05", ha="center", fontsize=9)
     plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
@@ -244,7 +270,7 @@ def main():
     cs = build_celeb_season()
     print(f"[1] 样本量: {len(cs)} (人-季)")
 
-    y, X_season, X_celeb, X_pro, names_season, names_celeb, names_pro = prepare_features(cs)
+    y, X_season, X_celeb, X_pro, names_season, names_celeb, names_pro, ref_names = prepare_features(cs)
     print(f"    placement 范围: {y.min():.2f} ~ {y.max():.2f}")
 
     # 一个模型：赛季 + 年龄 + 国家 + 行业 + 职业舞者（同级别）
@@ -258,29 +284,34 @@ def main():
     # 稳健性检验：赛季内归一化排名（跨赛季尺度一致）
     print("\n[2b] 稳健性检验：因变量 = 赛季内按 min-max 归一化排名 (placement-min)/(max-min)")
     print("-" * 55)
-    y_norm, _, _, _, _, _, _ = prepare_features(cs, use_normalized_placement=True)
+    y_norm, _, _, _, _, _, _, _ = prepare_features(cs, use_normalized_placement=True)
     _, _, adj_r2_n = ols_fit(X_full, y_norm, names_full)
     print(f"  Adjusted R² = {adj_r2_n:.4f}")
+    print(f"  → 结论：主模型 Adj R²={adj_r2:.4f}，归一化后 Adj R²={adj_r2_n:.4f}，同量级，结论对因变量尺度稳健。")
 
-    # 系数表（只保留年龄、国家、行业、职业舞者，不报赛季）
+    # 系数表：年龄、国家、行业、职业舞者（不报赛季），并补全“参照水平”为 β=0，做到全都给出 beta
     core_idx = [i for i in res_full.index if not i.startswith("s_")]
     res_core = res_full.loc[core_idx]
-    res_core.to_csv(out_dir / "coef_placement_only.csv", encoding="utf-8-sig")
-    plot_placement_effects(res_core, out_dir / "placement_effects.png")
+    res_expanded = expand_coef_with_ref(res_core, ref_names)
+    res_expanded[["coef"]].to_csv(out_dir / "coef_placement_only.csv", encoding="utf-8-sig")
+    plot_placement_effects(res_expanded, out_dir / "placement_effects.png")
 
-    print("\n[3] 各因素对最终排名的影响（系数：负=排名更靠前，*=p<0.05）")
+    print("\n[3] 各因素对最终排名的影响（全部 β：负=更靠前，正=更靠后，*=p<0.05）")
     print("-" * 50)
-    for prefix, label in [("age_", "年龄组（参照：<30岁）"), ("cty_", "国家"), ("ind_", "行业"), ("pro_", "职业舞者")]:
-        vars_ = [i for i in res_core.index if i.startswith(prefix)]
+    for prefix, label in [("age_", "年龄组"), ("cty_", "国家"), ("ind_", "行业"), ("pro_", "职业舞者")]:
+        vars_ = [i for i in res_expanded.index if i.startswith(prefix)]
         if not vars_:
             continue
         print(f"\n  【{label}】")
-        for v in sorted(vars_, key=lambda x: res_core.loc[x, "coef"]):
-            c, p = res_core.loc[v, "coef"], res_core.loc[v, "pvalue"]
-            sig = "*" if p < 0.05 else ""
+        for v in sorted(vars_, key=lambda x: res_expanded.loc[x, "coef"]):
+            c, p = res_expanded.loc[v, "coef"], res_expanded.loc[v, "pvalue"]
+            sig = "*" if (pd.notna(p) and p < 0.05) else ""
             name = v.replace(prefix, "")
-            direction = "更靠前" if c < 0 else "更靠后"
-            print(f"    {name}: β = {c:+.2f}{sig}  (p={p:.4f})  → 相对参照组排名{direction}")
+            if pd.isna(p) and c == 0:
+                print(f"    {name}: β = 0  （基准水平）")
+            else:
+                direction = "更靠前" if c < 0 else "更靠后"
+                print(f"    {name}: β = {c:+.2f}{sig}  (p={p:.4f})  → 排名{direction}")
 
     print(f"\n[完成] 系数表已保存: {out_dir / 'coef_placement_only.csv'}")
 

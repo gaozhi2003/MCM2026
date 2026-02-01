@@ -464,22 +464,38 @@ def main():
     print("\n=== 新方法：末尾两位 + 评委最低 ===")
 
     def mark_eliminated_by_bottom2_then_judge(group):
-        """先取观众排名与评委排名末尾两位候选，再按评委评分淘汰最低者"""
+        """观众排名+评委排名相加，取最大的候选，再按评委评分淘汰最低者
+        
+        多淘汰周处理：候选人数量为 max(2, n_elim)
+        """
         n_elim = int(group["n_eliminated"].iloc[0])
         group = group.copy()
         group["pred_eliminated_alt"] = 0
+        
+        # 综合排名分数 = 观众排名 + 评委排名（值越大越靠后）
+        group["combined_rank_score"] = group["audience_rank"] + group["judge_rank"]
+        
+        # 初始化排名（暂时设为None，最后只设置被淘汰者）
+        group["final_rank_alt"] = group["combined_rank_score"].rank(ascending=True, method="min")
+        
         if n_elim == 0:
             return group
-
-        # 末尾两位（排名值越大越差）
-        bottom_audience = group.nlargest(2, "audience_rank").index
-        bottom_judge = group.nlargest(2, "judge_rank").index
-        candidate_idx = list(set(bottom_audience).union(set(bottom_judge)))
+        
+        # 取综合排名分数最大的 max(2, n_elim) 位作为候选人
+        # 确保候选人数量至少为2，且不少于需要淘汰的人数
+        n_candidates = max(2, n_elim)
+        n_candidates = min(n_candidates, len(group))  # 不能超过总人数
+        candidate_idx = group.nlargest(n_candidates, "combined_rank_score").index
         candidates = group.loc[candidate_idx]
 
-        # 按评委评分最低者淘汰（若要淘汰多人，则取最低的 n_elim 人）
+        # 从候选人中按评委评分最低者淘汰（若要淘汰多人，则取最低的 n_elim 人）
         elim_idx = candidates.nsmallest(n_elim, "judge_total_score").index
         group.loc[elim_idx, "pred_eliminated_alt"] = 1
+        
+        # 被淘汰者排名设为该周最差名次（即总人数）
+        worst_rank = len(group)
+        group.loc[elim_idx, "final_rank_alt"] = worst_rank
+        
         return group
 
     long_df = long_df.groupby(["season", "week"], group_keys=False).apply(mark_eliminated_by_bottom2_then_judge)
@@ -532,6 +548,20 @@ def main():
         print(f"[已导出] 新方法结果表: {alt_path}")
     except Exception as e:
         print(f"[错误] 导出新方法结果表失败: {e}")
+    
+    # 导出新方法排名表（与percentage_method_rankings.csv格式对应）
+    new_rank_cols = [
+        "season", "week", "celebrity_name",
+        "judge_rank", "audience_rank", "final_rank_alt", "pred_eliminated_alt", "judge_total_score"
+    ]
+    new_rank_df = long_df[new_rank_cols].copy()
+    new_rank_df = new_rank_df.sort_values(["season", "week", "final_rank_alt", "judge_rank"]).reset_index(drop=True)
+    new_rank_path = project_root / "data" / "new_method_rankings.csv"
+    try:
+        new_rank_df.to_csv(new_rank_path, index=False, encoding="utf-8-sig")
+        print(f"[已导出] 新方法排名表: {new_rank_path}")
+    except Exception as e:
+        print(f"[错误] 导出新方法排名表失败: {e}")
     
     # ========== 三类指标综合评估 ==========
     print("\n" + "=" * 70)

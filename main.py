@@ -7,6 +7,8 @@ import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from datetime import datetime
+
 
 # 添加项目路径
 project_root = Path(__file__).parent
@@ -48,6 +50,19 @@ from evaluation.uncertainty import (
     analyze_vote_count_uncertainty
 )
 from evaluation.fairness import reversal_ratios
+
+
+class _TeeStdout:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
 
 
 def main():
@@ -306,8 +321,21 @@ def main():
     # 百分比结合法：综合得分 = 评委百分比 + 观众百分比
     long_df["combined_share"] = long_df["judge_share"] + long_df["audience_share"]
 
+    # 百分比结合法：排名（1为最好）
+    long_df["audience_share_rank"] = long_df.groupby(["season", "week"])["audience_share"].rank(
+        ascending=False, method="min"
+    )
+    long_df["combined_share_rank"] = long_df.groupby(["season", "week"])["combined_share"].rank(
+        ascending=False, method="min"
+    )
+
     # 排名结合法：综合排名 = 评委排名 + 观众排名
     long_df["combined_rank"] = long_df["judge_rank"] + long_df["audience_rank"]
+
+    # 排名结合法：最终排名（1为最好）
+    long_df["combined_rank_final"] = long_df.groupby(["season", "week"])["combined_rank"].rank(
+        ascending=True, method="min"
+    )
 
     # 基于淘汰概率预测淘汰（所有赛季）
     print("- 根据淘汰概率预测淘汰...")
@@ -324,6 +352,52 @@ def main():
         return group
 
     long_df = long_df.groupby(["season", "week"]).apply(mark_top_n_eliminated_by_prob).reset_index(drop=True)
+
+    # 基于存活概率的统一最终排名（越高越安全，排名越好）
+    # 规则：每赛季每周按存活概率排序；若该周淘汰多人，则被淘汰者排名相同
+    def assign_final_rank(group):
+        n_elim = int(group["n_eliminated"].iloc[0])
+        # 先按存活概率（越高越好）给出基础排名
+        base_rank = group["survival_prob"].rank(ascending=False, method="min")
+        group = group.copy()
+        group["final_rank"] = base_rank
+        if n_elim > 0:
+            # 找到淘汰的选手（存活概率最低）
+            elim_idx = group.nsmallest(n_elim, "survival_prob").index
+            # 淘汰者统一排名为该周最差名次
+            worst_rank = base_rank.max()
+            group.loc[elim_idx, "final_rank"] = worst_rank
+        return group
+
+    long_df = long_df.groupby(["season", "week"], group_keys=False).apply(assign_final_rank)
+
+    # 导出两种方法下的排名关系表（最终排名一致，来自淘汰概率）
+    share_rank_cols = [
+        "season", "week", "celebrity_name",
+        "judge_rank", "audience_share_rank", "final_rank", "pred_eliminated", "survival_prob"
+    ]
+    rank_rank_cols = [
+        "season", "week", "celebrity_name",
+        "judge_rank", "audience_rank", "final_rank", "pred_eliminated", "survival_prob"
+    ]
+    share_rank_df = long_df[share_rank_cols].copy()
+    rank_rank_df = long_df[rank_rank_cols].copy()
+
+    # 按赛季-周排序，确保按季度每周划分
+    share_rank_df = share_rank_df.sort_values(["season", "week", "final_rank", "judge_rank"]).reset_index(drop=True)
+    rank_rank_df = rank_rank_df.sort_values(["season", "week", "final_rank", "judge_rank"]).reset_index(drop=True)
+
+    share_rank_path = project_root / "data" / "percentage_method_rankings.csv"
+    rank_rank_path = project_root / "data" / "ranking_method_rankings.csv"
+    try:
+        share_rank_df.to_csv(share_rank_path, index=False, encoding="utf-8-sig")
+        rank_rank_df.to_csv(rank_rank_path, index=False, encoding="utf-8-sig")
+        print(f"[已导出] 百分比结合法排名表: {share_rank_path}")
+        print(f"[已导出] 排名结合法排名表: {rank_rank_path}")
+    except PermissionError:
+        print(f"[警告] 无法写入排名表（文件被占用）")
+    except Exception as e:
+        print(f"[错误] 导出排名表失败: {e}")
 
     print("[完成] 观众投票比例和排名已预测")
     # 8. 模型评估
@@ -373,6 +447,8 @@ def main():
             n_weeks = subset.groupby(["season", "week"]).ngroups
             if n_weeks > 0:
                 print(f"  - {n}人淘汰周 ({n_weeks}周): {acc:.4f}")
+
+    '''
     
     # ========== 一致性评估 ==========
     print("\n=== 一致性评估：能否定位淘汰者 ===")
@@ -489,8 +565,19 @@ def main():
     print("\n" + "=" * 60)
     print("分析完成！")
     print("=" * 60)
-    
+    '''
 
 
 if __name__ == "__main__":
-    main()
+    log_dir = project_root / "data"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"terminal_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(log_path, "w", encoding="utf-8") as f:
+        original_stdout = sys.stdout
+        sys.stdout = _TeeStdout(original_stdout, f)
+        try:
+            print(f"[日志] 终端输出将同步保存至: {log_path}")
+            main()
+            print(f"[日志] 输出保存完成: {log_path}")
+        finally:
+            sys.stdout = original_stdout

@@ -1,0 +1,258 @@
+[日志] 终端输出将同步保存至: data\terminal_output_20260201_104233.txt
+============================================================
+MCM 问题 C 数据分析模型
+============================================================
+
+[步骤 1] 加载数据...
+成功加载数据: data\2026_MCM_Problem_C_Data.csv
+数据形状: (421, 53)
+列名: ['celebrity_name', 'ballroom_partner', 'celebrity_industry', 'celebrity_homestate', 'celebrity_homecountry/region', 'celebrity_age_during_season', 'season', 'results', 'placement', 'week1_judge1_score', 'week1_judge2_score', 'week1_judge3_score', 'week1_judge4_score', 'week2_judge1_score', 'week2_judge2_score', 'week2_judge3_score', 'week2_judge4_score', 'week3_judge1_score', 'week3_judge2_score', 'week3_judge3_score', 'week3_judge4_score', 'week4_judge1_score', 'week4_judge2_score', 'week4_judge3_score', 'week4_judge4_score', 'week5_judge1_score', 'week5_judge2_score', 'week5_judge3_score', 'week5_judge4_score', 'week6_judge1_score', 'week6_judge2_score', 'week6_judge3_score', 'week6_judge4_score', 'week7_judge1_score', 'week7_judge2_score', 'week7_judge3_score', 'week7_judge4_score', 'week8_judge1_score', 'week8_judge2_score', 'week8_judge3_score', 'week8_judge4_score', 'week9_judge1_score', 'week9_judge2_score', 'week9_judge3_score', 'week9_judge4_score', 'week10_judge1_score', 'week10_judge2_score', 'week10_judge3_score', 'week10_judge4_score', 'week11_judge1_score', 'week11_judge2_score', 'week11_judge3_score', 'week11_judge4_score']
+
+[步骤 2] 数据清理...
+缺失值统计:
+celebrity_name                    0
+ballroom_partner                  0
+celebrity_industry                0
+celebrity_homestate              56
+celebrity_homecountry/region      0
+                               ... 
+week10_total_score                0
+week11_total_score                0
+exit_week_from_results          123
+exit_week_from_scores             0
+exit_week                         0
+Length: 67, dtype: int64
+
+[步骤 3] 检测异常值...
+数据范围异常记录总数: 0
+
+统计学异常值数量: 810
+评分超过 10 的记录: 72
+
+出错记录（评分超过10）:
+         celebrity_name  season            results
+91        Mark Dacascos       9  Eliminated Week 7
+96         Joanna Krupa       9  Eliminated Week 9
+100        Aaron Carter       9  Eliminated Week 8
+101                 Mya       9          2nd Place
+102        Donny Osmond       9          1st Place
+103      Kelly Osbourne       9          3rd Place
+108      Chad Ochocinco      10  Eliminated Week 9
+110     Pamela Anderson      10  Eliminated Week 7
+111  Nicole Scherzinger      10          1st Place
+112        Erin Andrews      10          3rd Place
+退出周不一致记录: 1
+
+出错记录（退出周不一致）:
+    celebrity_name  season            results  exit_week_from_results  exit_week_from_scores
+204     Diana Nyad      18  Eliminated Week 2                     2.0                      1
+名次重复记录: 3
+
+出错记录（名次重复）:
+     season  placement  count
+403      33         10      2
+404      33         12      2
+417      34         13      2
+评分超过 10 的记录: 72
+退出周不一致记录: 1
+名次重复记录(按季): 3
+
+[步骤 4] 构建周粒度数据...
+
+长表结构信息:
+形状: (4631, 14)
+列名: ['celebrity_name', 'ballroom_partner', 'celebrity_industry', 'celebrity_homestate', 'celebrity_homecountry/region', 'celebrity_age_during_season', 'season', 'results', 'placement', 'exit_week', 'judge_total_score', 'judge_count', 'judge_std', 'week']
+数据类型:
+celebrity_name                   object
+ballroom_partner                 object
+celebrity_industry               object
+celebrity_homestate              object
+celebrity_homecountry/region     object
+celebrity_age_during_season       int64
+season                            int64
+results                          object
+placement                         int64
+exit_week                       float64
+judge_total_score               float64
+judge_count                       int64
+judge_std                       float64
+week                              int64
+dtype: object
+- 创建淘汰标签...
+有效周数: 335
+淘汰情况统计:
+  无淘汰: 40周
+  单淘汰: 223周
+  双淘汰: 55周
+  三淘汰: 14周
+  4人淘汰: 3周
+
+[多淘汰周详情] 共 72 周：
+  Season 2, Week 8: 2人淘汰 → Stacy Keibler, Jerry Rice
+  Season 3, Week 5: 2人淘汰 → Willa Ford, Sara Evans
+  Season 4, Week 10: 2人淘汰 → Laila Ali, Joey Fatone
+  Season 5, Week 10: 2人淘汰 → Mel B, Marie Osmond
+  Season 6, Week 2: 2人淘汰 → Monica Seles, Penn Jillette
+  Season 6, Week 10: 2人淘汰 → Cristian de la Fuente, Jason Taylor
+  Season 7, Week 1: 2人淘汰 → Ted McGinley, Jeffrey Ross
+  Season 7, Week 2: 2人淘汰 → Misty May-Treanor, Kim Kardashian
+  Season 7, Week 10: 2人淘汰 → Warren Sapp, Lance Bass
+  Season 8, Week 4: 2人淘汰 → Steve Wozniak, Holly Madison
+  Season 8, Week 11: 2人淘汰 → Gilles Marini, Melissa Rycroft
+  Season 9, Week 1: 2人淘汰 → Ashley Hamiliton, Macy Gray
+  Season 9, Week 3: 2人淘汰 → Debi Mazar, Tom DeLay
+  Season 9, Week 6: 2人淘汰 → Melissa Joan Hart, Louie Vito
+  Season 9, Week 7: 2人淘汰 → Mark Dacascos, Michael Irvin
+  Season 9, Week 10: 2人淘汰 → Mya, Kelly Osbourne
+  Season 10, Week 10: 2人淘汰 → Evan Lysacek, Erin Andrews
+  Season 11, Week 10: 2人淘汰 → Kyle Massey, Bristol Palin
+  Season 12, Week 10: 2人淘汰 → Chelsea Kane, Kirstie Alley
+  Season 13, Week 10: 2人淘汰 → Ricki Lake, Rob Kardashian
+  Season 14, Week 8: 2人淘汰 → Roshon Fegan, Melissa Gilbert
+  Season 14, Week 10: 2人淘汰 → William Levy, Katherine Jenkins
+  Season 15, Week 3: 2人淘汰 → Helio Castroneves, Drew Lachey
+  Season 15, Week 8: 2人淘汰 → Gilles Marini, Kirstie Alley
+  Season 15, Week 9: 2人淘汰 → Apolo Anton Ohno, Emmitt Smith
+  Season 15, Week 10: 2人淘汰 → Kelly Monaco, Shawn Johnson
+  Season 16, Week 10: 3人淘汰 → Zendaya, Alexandra Raisman, Jacoby Jones
+  Season 17, Week 11: 3人淘汰 → Corbin Bleu, Bill Engvall, Jack Osbourne
+  Season 18, Week 2: 2人淘汰 → Billy Dee Williams, Sean Avery
+  Season 18, Week 10: 3人淘汰 → James Maslow, Candace Cameron Bure, Amy Purdy
+  Season 19, Week 11: 3人淘汰 → Janel Parrish, Bethany Mota, Sadie Robertson
+  Season 20, Week 8: 2人淘汰 → Robert Herjavec, Chris Soules
+  Season 20, Week 10: 2人淘汰 → Riker Lynch, Noah Galloway
+  Season 21, Week 2: 3人淘汰 → Victor Espinoza, Chaka Khan, Kim Zolciak-Biermann
+  Season 21, Week 9: 2人淘汰 → Alexa PenaVega, Tamar Braxton
+  Season 21, Week 11: 3人淘汰 → Carlos PenaVega, Alek Skarlatos, Nick Carter
+  Season 22, Week 7: 2人淘汰 → Kim Fields, Von Miller
+  Season 22, Week 9: 2人淘汰 → Antonio Brown, Wanya Morris
+  Season 22, Week 10: 2人淘汰 → Paige VanZant, Ginger Zee
+  Season 23, Week 4: 2人淘汰 → Babyface, Vanilla Ice
+  Season 23, Week 11: 3人淘汰 → Calvin Johnson Jr., James Hinchcliffe, Jana Kramer
+  Season 24, Week 7: 2人淘汰 → Nancy Kerrigan, Nick Viall
+  Season 24, Week 10: 2人淘汰 → David Ross, Normani
+  Season 25, Week 2: 2人淘汰 → Barbara Corcoran, Debbie Gibson
+  Season 25, Week 7: 2人淘汰 → Nikki Bella, Vanessa Lachey
+  Season 25, Week 10: 3人淘汰 → Frankie Muniz, Lindsey Stirling, Drew Scott
+  Season 26, Week 1: 2人淘汰 → Jamie Anderson, Johnny Damon
+  Season 26, Week 2: 2人淘汰 → Kareem Abdul-Jabbar, Arike Ogunbowale
+  Season 26, Week 3: 3人淘汰 → Jennie Finch Daigle, Chris Mazdzer, Mirai Nagasu
+  Season 26, Week 4: 2人淘汰 → Tonya Harding, Josh Norman
+  Season 27, Week 7: 2人淘汰 → John Schneider, DeMarcus Ware
+  Season 27, Week 8: 2人淘汰 → Juan Pablo Di Pace, Joe Amabile
+  Season 27, Week 9: 3人淘汰 → Evanna Lynch, Milo Manheim, Alexis Ren
+  Season 28, Week 2: 2人淘汰 → Ray Lewis, Mary Wilson
+  Season 28, Week 11: 3人淘汰 → Kel Mitchell, Lauren Alaina, Ally Brooke
+  Season 29, Week 7: 2人淘汰 → Monica Aldama, Jeannie Mai
+  Season 29, Week 10: 2人淘汰 → Skai Jackson, Johnny Weir
+  Season 29, Week 11: 3人淘汰 → Justina Machado, Nev Schulman, Nelly
+  Season 30, Week 4: 2人淘汰 → Brian Austin Green, Matt James
+  Season 30, Week 8: 2人淘汰 → Jimmie Allen, Olivia Jade
+  Season 30, Week 9: 2人淘汰 → Melora Hardin, Suni Lee
+  Season 30, Week 10: 3人淘汰 → Cody Rigsby, JoJo Siwa, Amanda Kloots
+  Season 31, Week 5: 2人淘汰 → Selma Blair, Joseph Baena
+  Season 31, Week 8: 2人淘汰 → Heidi D'Amelio, Vinny Guadagnino
+  Season 31, Week 9: 2人淘汰 → Trevor Donovan, Daniel Durant
+  Season 31, Week 10: 3人淘汰 → Wayne Brady, Shangela, Gabby Windey
+  Season 32, Week 11: 4人淘汰 → Alyson Hannigan, Jason Mraz, Charity Lawson, Ariana Madix
+  Season 33, Week 2: 2人淘汰 → Tori Spelling, Anna Delvey
+  Season 33, Week 3: 2人淘汰 → Eric Roberts, Reginald VelJohnson
+  Season 33, Week 9: 4人淘汰 → Chandler Kinney, Danny Amendola, Stephen Nedoroscik, Ilona Maher
+  Season 34, Week 2: 2人淘汰 → Corey Feldman, Baron Davis
+  Season 34, Week 11: 4人淘汰 → Elaine Hendrix, Jordan Chiles, Alix Earle, Dylan Efron
+
+[步骤 5] 特征工程...
+
+[步骤 6] 模型训练...
+- 淘汰概率模型 (预测该周是否被淘汰, 训练集: 第1-34季)
+- 基于淘汰概率和评委得分反推观众投票比例...
+- 根据淘汰概率预测淘汰...
+[完成] 观众投票比例和排名已预测
+
+[步骤 8] 模型评估...
+
+- 淘汰概率分布
+平均淘汰概率: 0.1453
+淘汰概率范围: [0.0000, 1.0000]
+
+- 观众投票比例分布
+平均投票比例: 0.1206
+投票比例范围: [0.0000, 1.0000]
+
+- 淘汰预测准确性
+记录级别准确率: 0.8596 (所有选手-周记录)
+淘汰者识别准确率 (Recall): 0.4961 (仅统计真正被淘汰的387人)
+周平均准确率: 0.8318 (每周准确率的平均)
+周级别完全正确率: 0.4358 (整周所有人都对)
+  - 0人淘汰周 (40周): 1.0000
+  - 1人淘汰周 (223周): 0.8491
+  - 2人淘汰周 (55周): 0.7975
+  - 3人淘汰周 (14周): 0.6716
+  - 4人淘汰周 (3周): 0.8667
+
+=== 一致性评估：能否定位淘汰者 ===
+Hit@2 命中率: 0.6627 (195.50/387)
+Hit@3 命中率: 0.7915 (233.50/387)
+- Hit@2 按淘汰人数分组：
+  - 1人淘汰周 Hit@2: 0.6547
+  - 2人淘汰周 Hit@2: 0.6273
+  - 3人淘汰周 Hit@2: 0.8571
+  - 4人淘汰周 Hit@2: 1.0000
+- Hit@3 按淘汰人数分组：
+  - 1人淘汰周 Hit@3: 0.7848
+  - 2人淘汰周 Hit@3: 0.8273
+  - 3人淘汰周 Hit@3: 0.7381
+  - 4人淘汰周 Hit@3: 0.8889
+
+淘汰边界间隔分析:
+  全局统计:
+    - 均值: 0.0851
+    - 标准差: 0.0730
+    - 范围: [0.0000, 0.3496]
+    - 中位数: 0.0621
+    - 四分位数范围: [0.0265, 0.1324]
+  按淘汰人数分组:
+    1人淘汰 (223周): 均值 0.0956, 标准差 0.0748, 范围 [0.0000, 0.3496]
+    2人淘汰 (55周): 均值 0.0617, 标准差 0.0609, 范围 [0.0000, 0.3427]
+    3人淘汰 (14周): 均值 0.0238, 标准差 0.0141, 范围 [0.0020, 0.0554]
+    4人淘汰 (3周): 均值 0.0167, 标准差 0.0109, 范围 [0.0049, 0.0264]
+
+=== 不确定性分析：投票区间和方差 ===
+- Bootstrap 分析（500次重采样）...
+  选手级别分析:
+    - 平均区间宽度 (95% CI): 0.0119
+    - 平均后验方差: 0.0000
+
+- 投票总数确定性分析...
+  投票总数设置:
+    - 基准值: 5000000 票/周
+    - 平均值: 4468269 票/周
+    - 标准差: 316829 票
+  个人票数不确定性:
+    - 平均变异系数(CV): 0.0256
+    - 平均票数区间宽度(95% CI): 52049 票
+    - 平均标准差: 13472 票
+    - 平均相对区间宽度: 0.0990
+
+  [已导出] 选手级别不确定性数据: data\individual_vote_uncertainty.csv
+    - 共 2777 条记录
+    - 列名: ['season', 'week', 'celebrity_name', 'vote_mean', 'vote_std', 'vote_ci_lower', 'vote_ci_upper', 'vote_ci_width', 'coefficient_of_variation', 'relative_ci_width']
+
+  前5条示例:
+    S1W1 Evander Holyfield: 票数=681967, CI宽度=27516, CV=0.0107
+    S1W1 Joey McIntyre: 票数=719383, CI宽度=16436, CV=0.0058
+    S1W1 John O'Hurley: 票数=719383, CI宽度=16436, CV=0.0058
+    S1W1 Kelly Monaco: 票数=569955, CI宽度=40015, CV=0.0185
+    S1W1 Rachel Hunter: 票数=719383, CI宽度=16436, CV=0.0058
+
+=== 公平性/偏向性评估 ===
+裁判与粉丝投票的逆转情况:
+  - 裁判被粉丝逆转比例: 0.0371
+    (裁判给低分但粉丝投票高 → 粉丝对评分的抗议)
+  - 粉丝被裁判逆转比例: 0.0407
+    (粉丝投票低但裁判给高分 → 裁判与粉丝偏好不同)
+
+============================================================
+分析完成！
+============================================================
+[日志] 输出保存完成: data\terminal_output_20260201_104233.txt

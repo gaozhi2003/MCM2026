@@ -168,7 +168,8 @@ def prepare_weekly_features(long_df: pd.DataFrame):
     - season_week（用于 FE）
     - 年龄组、国家、行业、职业舞者哑变量（与 placement_model 同逻辑）
     - cluster_id = (celebrity_name, season)
-    返回 (df, y1, y2, X, X_names, cluster_ids)。
+    返回 (df, y1, y2, X, X_names, cluster_ids, ref_names)。
+    ref_names: 各因素被 drop_first 掉的水平名，用于输出时补全为 β=0，做到“全都给出 beta”。
     """
     df = long_df.copy()
     n_sw = df.groupby(["season", "week"])["judge_rank"].transform("size")
@@ -177,7 +178,7 @@ def prepare_weekly_features(long_df: pd.DataFrame):
     df["season_week"] = "s" + df["season"].astype(str) + "_w" + df["week"].astype(str)
     df["cluster_id"] = df["celebrity_name"].astype(str) + "_" + df["season"].astype(str)
 
-    # 年龄组（参照 <30）
+    # 年龄组
     age = pd.to_numeric(df["celebrity_age_during_season"], errors="coerce")
     age = age.fillna(age.median() if age.notna().any() else 30)
     bins, labels = [0, 30, 40, 50, 150], ["<30", "30-39", "40-49", "50+"]
@@ -224,7 +225,34 @@ def prepare_weekly_features(long_df: pd.DataFrame):
     y2 = df["audience_rank_norm"].values
     # 聚类需要整数组标识
     cluster_ids, _ = pd.factorize(df["cluster_id"])
-    return df, y1, y2, X, X_names, cluster_ids
+    # 被 drop_first 掉的水平（用于输出时补全为 β=0）
+    ref_names = {
+        "age": "age_" + str(labels[0]),
+        "cty": "cty_" + sorted(df["cty_g"].unique())[0],
+        "ind": "ind_" + sorted(df["ind_g"].unique())[0],
+        "pro": "pro_" + sorted(df["pro_g"].unique())[0],
+    }
+    return df, y1, y2, X, X_names, cluster_ids, ref_names
+
+
+def expand_coef_with_ref(res_core: pd.DataFrame, ref_names: dict) -> pd.DataFrame:
+    """
+    在系数表中为每个因素的“参照水平”补一行 β=0、pvalue=NaN，使输出为“全都给出 beta”。
+    各因素内顺序：参照水平（0） + 其余水平（与 res_core 中一致）。若有 se 列则参照行 se=NaN。
+    """
+    rows = []
+    ref_row = {"coef": 0.0, "pvalue": np.nan}
+    if "se" in res_core.columns:
+        ref_row["se"] = np.nan
+    for prefix, ref_var in [("age_", ref_names["age"]), ("cty_", ref_names["cty"]), ("ind_", ref_names["ind"]), ("pro_", ref_names["pro"])]:
+        block = [i for i in res_core.index if str(i).startswith(prefix)]
+        if not block:
+            continue
+        rows.append(pd.DataFrame(ref_row, index=[ref_var]))
+        rows.append(res_core.loc[block])
+    if not rows:
+        return res_core
+    return pd.concat(rows, axis=0)
 
 
 def ols_cluster(y: np.ndarray, X: np.ndarray, names: list, cluster_ids: np.ndarray):
@@ -402,7 +430,7 @@ def main():
     print(f"    观测数: {len(long_df)} (人-季-周)")
 
     print("[2] 周内归一化排名与特征...")
-    df, y1, y2, X, X_names, cluster_ids = prepare_weekly_features(long_df)
+    df, y1, y2, X, X_names, cluster_ids, ref_names = prepare_weekly_features(long_df)
     print(f"    judge_rank_norm 范围: {y1.min():.4f} ~ {y1.max():.4f}")
     print(f"    audience_rank_norm 范围: {y2.min():.4f} ~ {y2.max():.4f}")
     print(f"    自变量维度: {X.shape[1]} (含 season-week FE)")
@@ -415,15 +443,17 @@ def main():
     res_audience, r2_a, adj_r2_a = ols_cluster(y2, X, X_names, cluster_ids)
     print(f"    R² = {r2_a:.4f}   Adj R² = {adj_r2_a:.4f}")
 
-    # 系数表只保留非 season_week 的变量
+    # 系数表：只保留非 season_week 的变量，并补全参照水平为 β=0，做到全都给出 beta
     core_idx = [i for i in res_judge.index if not str(i).startswith("sw_")]
     res_judge_core = res_judge.loc[core_idx]
     res_audience_core = res_audience.loc[core_idx]
-    res_judge_core.to_csv(out_dir / "coef_judge_rank_norm.csv", encoding="utf-8-sig")
-    res_audience_core.to_csv(out_dir / "coef_audience_rank_norm.csv", encoding="utf-8-sig")
-    print(f"\n[5] 系数表已保存: coef_judge_rank_norm.csv, coef_audience_rank_norm.csv")
+    res_judge_expanded = expand_coef_with_ref(res_judge_core, ref_names)
+    res_audience_expanded = expand_coef_with_ref(res_audience_core, ref_names)
+    res_judge_expanded[["coef"]].to_csv(out_dir / "coef_judge_rank_norm.csv", encoding="utf-8-sig")
+    res_audience_expanded[["coef"]].to_csv(out_dir / "coef_audience_rank_norm.csv", encoding="utf-8-sig")
+    print(f"\n[5] 系数表已保存（含全部 β，基准水平 β=0）: coef_judge_rank_norm.csv, coef_audience_rank_norm.csv")
 
-    plot_comparison(res_judge, res_audience, out_dir / "judge_vs_audience_effects.png")
+    plot_comparison(res_judge_expanded, res_audience_expanded, out_dir / "judge_vs_audience_effects.png")
 
     print("\n[6] 交互检验：堆叠 judge/audience + X*type_audience，交互显著即影响方式不同")
     run_interaction_test(y1, y2, X, X_names, cluster_ids, out_dir)

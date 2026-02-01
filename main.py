@@ -44,6 +44,7 @@ from evaluation.consistency import (
     calculate_hit_at_k,
     analyze_boundary_margin_distribution
 )
+from evaluation.comprehensive_metrics import comprehensive_evaluation
 from evaluation.uncertainty import (
     weekly_uncertainty,
     analyze_vote_share_intervals,
@@ -532,6 +533,13 @@ def main():
     except Exception as e:
         print(f"[错误] 导出新方法结果表失败: {e}")
     
+    # ========== 三类指标综合评估 ==========
+    print("\n" + "=" * 70)
+    print("【综合评估】新旧方法对比 - 稳定性、抗操纵性、一致性")
+    print("=" * 70)
+    
+    metrics_result = comprehensive_evaluation(long_df, output_dir=str(project_root / 'data'))
+    
     # 8. 模型评估
     print("\n[步骤 8] 模型评估...")
     
@@ -580,7 +588,7 @@ def main():
             if n_weeks > 0:
                 print(f"  - {n}人淘汰周 ({n_weeks}周): {acc:.4f}")
 
-    '''
+    
     
     # ========== 一致性评估 ==========
     print("\n=== 一致性评估：能否定位淘汰者 ===")
@@ -610,6 +618,85 @@ def main():
     print("- Hit@3 按淘汰人数分组：")
     _print_hit_by_n(hit_at_3, 3)
     
+    # 详细输出每个赛季每周的Δ、Hit@2、Hit@3
+    print("\n- 每个赛季每周的详细指标（前30周示例）：")
+    print("注：Δ（边界间隔）= 第n名（淘汰最后一人）的分数 - 第n+1名（安全者）的分数")
+    
+    # 获取Hit@k的详细数据
+    hit2_details = hit_at_2.get('details')
+    hit3_details = hit_at_3.get('details')
+    
+    if hit2_details is not None and not hit2_details.empty:
+        # 为Hit@2和Hit@3分别计算对应的边界间隔
+        # 边界间隔基于实际淘汰人数n来计算：第n名与第n+1名的差距
+        weekly_metrics_data = []
+        for (season, week), group in long_df.groupby(["season", "week"]):
+            n_elim = int(group["is_eliminated"].sum())
+            if n_elim == 0:
+                continue
+            
+            # 按淘汰概率排序（高分=更危险）
+            scores_series = group.set_index("celebrity_name")["elimination_prob"].sort_values(ascending=False)
+            
+            # 边界间隔Δ：基于实际淘汰人数n
+            # Δ = 第n名（淘汰最后一人）的分数 - 第n+1名（安全者）的分数
+            boundary_margin = np.nan
+            if len(scores_series) > n_elim:
+                eliminated_last_score = scores_series.iloc[n_elim - 1]  # 第n名
+                safe_first_score = scores_series.iloc[n_elim]  # 第n+1名
+                boundary_margin = eliminated_last_score - safe_first_score
+            
+            # 获取Hit@2和Hit@3的值
+            hit2_val = hit2_details[(hit2_details['season'] == season) & (hit2_details['week'] == week)]['hit_at_2'].values
+            hit2_val = hit2_val[0] if len(hit2_val) > 0 else np.nan
+            
+            hit3_val = hit3_details[(hit3_details['season'] == season) & (hit3_details['week'] == week)]['hit_at_3'].values
+            hit3_val = hit3_val[0] if len(hit3_val) > 0 else np.nan
+            
+            weekly_metrics_data.append({
+                'season': season,
+                'week': week,
+                'n_eliminated': n_elim,
+                'hit_at_2': hit2_val,
+                'hit_at_3': hit3_val,
+                'boundary_margin': boundary_margin
+            })
+        
+        weekly_metrics = pd.DataFrame(weekly_metrics_data)
+        
+        # 按赛季和周排序
+        weekly_metrics = weekly_metrics.sort_values(['season', 'week']).reset_index(drop=True)
+        
+        # 打印表头
+        print(f"\n{'Season':<8} {'Week':<6} {'N':<4} {'Hit@2':<8} {'Δ_2':<12} {'Hit@3':<8} {'Δ_3':<12}")
+        print("-" * 80)
+        
+        # 打印前30周数据
+        for idx, row in weekly_metrics.head(30).iterrows():
+            season = int(row['season'])
+            week = int(row['week'])
+            n_elim = int(row['n_eliminated'])
+            hit2 = row['hit_at_2']
+            hit3 = row['hit_at_3']
+            margin = row['boundary_margin']
+            
+            hit2_str = f"{hit2:.4f}" if not pd.isna(hit2) else "N/A"
+            hit3_str = f"{hit3:.4f}" if not pd.isna(hit3) else "N/A"
+            margin_str = f"{margin:.6f}" if not pd.isna(margin) else "N/A"
+            
+            print(f"S{season:<7} W{week:<5} {n_elim:<4} {hit2_str:<8} {hit3_str:<8} {margin_str:<12}")
+        
+        if len(weekly_metrics) > 30:
+            print(f"... (共{len(weekly_metrics)}周，仅显示前30周)")
+        
+        # 导出完整数据
+        weekly_metrics_path = project_root / "data" / "weekly_hit_and_margin_metrics.csv"
+        try:
+            weekly_metrics.to_csv(weekly_metrics_path, index=False, encoding='utf-8-sig')
+            print(f"\n  [已导出] 完整周级别指标: {weekly_metrics_path}")
+        except Exception as e:
+            print(f"\n  [警告] 导出失败: {e}")
+    
     # 淘汰边界间隔分布
     print("\n淘汰边界间隔分析:")
     
@@ -625,6 +712,7 @@ def main():
         for n_elim, stats in margin['by_elimination_count'].items():
             print(f"    {n_elim}人淘汰 ({stats['count']}周): 均值 {stats['mean']:.4f}, 标准差 {stats['std']:.4f}, 范围 [{stats['min']:.4f}, {stats['max']:.4f}]")
    
+    '''
     # ========== 不确定性分析 ==========
     print("\n=== 不确定性分析：投票区间和方差 ===")
     
@@ -701,15 +789,4 @@ def main():
 
 
 if __name__ == "__main__":
-    log_dir = project_root / "data"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"terminal_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    with open(log_path, "w", encoding="utf-8") as f:
-        original_stdout = sys.stdout
-        sys.stdout = _TeeStdout(original_stdout, f)
-        try:
-            print(f"[日志] 终端输出将同步保存至: {log_path}")
-            main()
-            print(f"[日志] 输出保存完成: {log_path}")
-        finally:
-            sys.stdout = original_stdout
+    main()

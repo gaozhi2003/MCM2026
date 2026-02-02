@@ -68,10 +68,17 @@ class _TeeStdout:
             s.flush()
 
 
-def main():
-    """主程序"""
+def main(export_only_three_csvs=False, output_dir=None):
+    """主程序
+    
+    Args:
+        export_only_three_csvs: 若为 True，运行至三种方法排名表导出后即退出
+        output_dir: 导出目录，None 时使用 data/
+    """
+    base_export_dir = Path(output_dir) if output_dir else project_root / 'data'
     print("=" * 60)
-    print("MCM 问题 C 数据分析模型")
+    title = "MCM 问题 C - 仅导出三种方法排名表" if export_only_three_csvs else "MCM 问题 C 数据分析模型"
+    print(title)
     print("=" * 60)
     
     # 1. 数据加载
@@ -371,7 +378,31 @@ def main():
         ascending=True, method="min"
     )
 
-    # 基于淘汰概率预测淘汰（所有赛季）
+    # 两种方法各自按“综合排名”决定淘汰与周内排名（用于任务二对比：百分比法 vs 排名法结果可不同）
+    def mark_eliminated_by_combined_share(group):
+        n_elim = int(group["n_eliminated"].iloc[0])
+        group = group.copy()
+        group["pred_eliminated_pct"] = 0
+        if n_elim > 0:
+            # 百分比法：combined_share_rank 越大越差，淘汰最差的 n_elim 人
+            worst_idx = group.nlargest(int(n_elim), "combined_share_rank").index
+            group.loc[worst_idx, "pred_eliminated_pct"] = 1
+        return group
+
+    def mark_eliminated_by_combined_rank(group):
+        n_elim = int(group["n_eliminated"].iloc[0])
+        group = group.copy()
+        group["pred_eliminated_rank"] = 0
+        if n_elim > 0:
+            # 排名法：combined_rank_final 越大越差，淘汰最差的 n_elim 人
+            worst_idx = group.nlargest(int(n_elim), "combined_rank_final").index
+            group.loc[worst_idx, "pred_eliminated_rank"] = 1
+        return group
+
+    long_df = long_df.groupby(["season", "week"], group_keys=False).apply(mark_eliminated_by_combined_share).reset_index(drop=True)
+    long_df = long_df.groupby(["season", "week"], group_keys=False).apply(mark_eliminated_by_combined_rank).reset_index(drop=True)
+
+    # 基于淘汰概率预测淘汰（用于一致性等评估，保留原逻辑）
     print("- 根据淘汰概率预测淘汰...")
     def mark_top_n_eliminated_by_prob(group):
         """标记该周淘汰概率最高的N个人"""
@@ -380,50 +411,49 @@ def main():
             group["pred_eliminated"] = 0
             return group
         group["pred_eliminated"] = 0
-        # 淘汰概率越高越危险
         top_prob_idx = group.nlargest(int(n), "elimination_prob").index
         group.loc[top_prob_idx, "pred_eliminated"] = 1
         return group
 
     long_df = long_df.groupby(["season", "week"]).apply(mark_top_n_eliminated_by_prob).reset_index(drop=True)
 
-    # 基于存活概率的统一最终排名（越高越安全，排名越好）
-    # 规则：每赛季每周按存活概率排序；若该周淘汰多人，则被淘汰者排名相同
+    # 基于存活概率的统一最终排名（用于一致性等评估，保留原逻辑）
     def assign_final_rank(group):
         n_elim = int(group["n_eliminated"].iloc[0])
-        # 先按存活概率（越高越好）给出基础排名
         base_rank = group["survival_prob"].rank(ascending=False, method="min")
         group = group.copy()
         group["final_rank"] = base_rank
         if n_elim > 0:
-            # 找到淘汰的选手（存活概率最低）
             elim_idx = group.nsmallest(n_elim, "survival_prob").index
-            # 淘汰者统一排名为该周最差名次
             worst_rank = base_rank.max()
             group.loc[elim_idx, "final_rank"] = worst_rank
         return group
 
     long_df = long_df.groupby(["season", "week"], group_keys=False).apply(assign_final_rank)
 
-    # 导出两种方法下的排名关系表（最终排名一致，来自淘汰概率）
-    share_rank_cols = [
+    # 导出两种方法下的排名关系表（各用各自的综合排名与淘汰：百分比法用 combined_share_rank，排名法用 combined_rank_final）
+    share_rank_df = long_df[[
         "season", "week", "celebrity_name",
-        "judge_rank", "audience_share_rank", "final_rank", "pred_eliminated", "survival_prob"
-    ]
-    rank_rank_cols = [
+        "judge_rank", "audience_share_rank",
+        "combined_share_rank", "pred_eliminated_pct", "survival_prob"
+    ]].copy()
+    share_rank_df = share_rank_df.rename(columns={"combined_share_rank": "final_rank", "pred_eliminated_pct": "pred_eliminated"})
+
+    rank_rank_df = long_df[[
         "season", "week", "celebrity_name",
-        "judge_rank", "audience_rank", "final_rank", "pred_eliminated", "survival_prob"
-    ]
-    share_rank_df = long_df[share_rank_cols].copy()
-    rank_rank_df = long_df[rank_rank_cols].copy()
+        "judge_rank", "audience_rank",
+        "combined_rank_final", "pred_eliminated_rank", "survival_prob"
+    ]].copy()
+    rank_rank_df = rank_rank_df.rename(columns={"combined_rank_final": "final_rank", "pred_eliminated_rank": "pred_eliminated"})
 
     # 按赛季-周排序，确保按季度每周划分
     share_rank_df = share_rank_df.sort_values(["season", "week", "final_rank", "judge_rank"]).reset_index(drop=True)
     rank_rank_df = rank_rank_df.sort_values(["season", "week", "final_rank", "judge_rank"]).reset_index(drop=True)
 
-    share_rank_path = project_root / "data" / "percentage_method_rankings.csv"
-    rank_rank_path = project_root / "data" / "ranking_method_rankings.csv"
+    share_rank_path = base_export_dir / "percentage_method_rankings.csv"
+    rank_rank_path = base_export_dir / "ranking_method_rankings.csv"
     try:
+        base_export_dir.mkdir(parents=True, exist_ok=True)
         share_rank_df.to_csv(share_rank_path, index=False, encoding="utf-8-sig")
         rank_rank_df.to_csv(rank_rank_path, index=False, encoding="utf-8-sig")
         print(f"[已导出] 百分比结合法排名表: {share_rank_path}")
@@ -432,6 +462,17 @@ def main():
         print(f"[警告] 无法写入排名表（文件被占用）")
     except Exception as e:
         print(f"[错误] 导出排名表失败: {e}")
+
+    # 周级份额表：观众份额、评委份额、总体份额（供作图与“是否更偏观众”分析）
+    weekly_shares_path = base_export_dir / "weekly_shares.csv"
+    weekly_shares_df = long_df[
+        ["season", "week", "celebrity_name", "judge_share", "audience_share", "combined_share"]
+    ].sort_values(["season", "week", "celebrity_name"]).reset_index(drop=True)
+    try:
+        weekly_shares_df.to_csv(weekly_shares_path, index=False, encoding="utf-8-sig")
+        print(f"[已导出] 周级份额表: {weekly_shares_path}")
+    except Exception as e:
+        print(f"[错误] 导出周级份额表失败: {e}")
 
     print("[完成] 观众投票比例和排名已预测")
     
@@ -589,7 +630,7 @@ def main():
     ]
     new_rank_df = long_df[new_rank_cols].copy()
     new_rank_df = new_rank_df.sort_values(["season", "week", "final_rank_alt", "judge_rank"]).reset_index(drop=True)
-    new_rank_path = project_root / "data" / "new_method_rankings.csv"
+    new_rank_path = base_export_dir / "new_method_rankings.csv"
     try:
         new_rank_df.to_csv(new_rank_path, index=False, encoding="utf-8-sig")
         print(f"[已导出] 新方法排名表: {new_rank_path}")
@@ -885,4 +926,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    export_only = "--export-three-csvs-only" in sys.argv
+    out_dir = None
+    for i, a in enumerate(sys.argv):
+        if a == "--output-dir" and i + 1 < len(sys.argv):
+            out_dir = sys.argv[i + 1]
+            break
+    main(export_only_three_csvs=export_only, output_dir=out_dir)

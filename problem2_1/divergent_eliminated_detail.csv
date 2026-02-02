@@ -1,0 +1,71 @@
+﻿season,week,celebrity_name,评委排名,观众排名,elim_pct,elim_rank,is_divergent,fan_preferred,judge_preferred
+4,9,Ian Ziering,4.0,2.0,1,1,True,1,0
+9,1,Aaron Carter,2.0,8.0,1,0,True,0,1
+9,1,Joanna Krupa,1.0,11.0,1,0,True,0,1
+9,1,Ashley Hamiliton,15.0,14.0,0,1,True,1,0
+9,1,Michael Irvin,14.0,16.0,0,1,True,0,1
+15,6,Kelly Monaco,7.0,7.0,0,1,True,0,0
+15,6,Kirstie Alley,5.0,8.0,1,0,True,0,1
+16,10,Jacoby Jones,4.0,1.0,1,1,True,1,0
+16,10,Alexandra Raisman,3.0,2.0,0,1,True,1,0
+16,10,Kellie Pickler,1.0,3.0,1,0,True,0,1
+16,10,Zendaya,1.0,4.0,1,1,True,0,1
+17,3,Bill Nye,10.0,11.0,1,1,True,0,1
+17,5,Bill Engvall,8.0,9.0,1,1,True,0,1
+18,7,NeNe Leakes,7.0,6.0,0,1,True,1,0
+18,7,Candace Cameron Bure,3.0,7.0,1,0,True,0,1
+18,8,Candace Cameron Bure,4.0,6.0,1,1,True,0,1
+21,7,Alek Skarlatos,8.0,8.0,1,1,True,0,0
+21,9,Tamar Braxton,6.0,4.0,1,1,True,1,0
+21,9,Alek Skarlatos,5.0,6.0,1,1,True,0,1
+21,11,Alek Skarlatos,4.0,1.0,1,1,True,1,0
+21,11,Carlos PenaVega,1.0,3.0,1,1,True,0,1
+21,11,Nick Carter,1.0,4.0,1,1,True,0,1
+22,2,Mischa Barton,11.0,11.0,1,0,True,0,0
+22,2,Geraldo Rivera,12.0,12.0,0,1,True,0,0
+22,8,Antonio Brown,5.0,5.0,1,1,True,0,0
+23,9,Marilu Henner,5.0,6.0,1,1,True,0,1
+23,10,Calvin Johnson Jr.,5.0,1.0,0,1,True,1,0
+23,10,Terra Jole,1.0,5.0,1,0,True,0,1
+25,10,Frankie Muniz,3.0,1.0,1,1,True,1,0
+25,10,Drew Scott,4.0,2.0,1,1,True,1,0
+25,10,Lindsey Stirling,1.0,4.0,1,1,True,0,1
+27,9,Alexis Ren,3.0,1.0,1,1,True,1,0
+27,9,Bobby Bones,4.0,2.0,1,1,True,1,0
+27,9,Milo Manheim,1.0,4.0,1,1,True,0,1
+28,6,Sean Spicer,9.0,9.0,1,1,True,0,0
+28,7,Sean Spicer,8.0,8.0,1,1,True,0,0
+29,2,Charles Oakley,14.0,15.0,1,1,True,0,1
+29,3,Carole Baskin,14.0,14.0,1,1,True,0,0
+29,7,Monica Aldama,10.0,7.0,0,1,True,1,0
+29,7,Jeannie Mai,8.0,8.0,1,1,True,0,0
+29,7,Skai Jackson,2.0,10.0,1,0,True,0,1
+29,9,Nelly,7.0,7.0,1,1,True,0,0
+29,11,Nelly,4.0,1.0,1,1,True,1,0
+29,11,Kaitlyn Bristowe,1.0,3.0,1,1,True,0,1
+29,11,Justina Machado,1.0,4.0,1,1,True,0,1
+30,6,Kenya Moore,10.0,9.0,0,1,True,1,0
+30,6,Cody Rigsby,5.0,10.0,1,0,True,0,1
+30,8,Jimmie Allen,8.0,6.0,0,1,True,1,0
+30,8,Cody Rigsby,5.0,7.0,1,0,True,0,1
+30,8,Iman Shumpert,7.0,8.0,1,1,True,0,1
+30,10,Amanda Kloots,3.0,1.0,1,1,True,1,0
+30,10,Cody Rigsby,4.0,2.0,1,1,True,1,0
+30,10,Iman Shumpert,1.0,4.0,1,1,True,0,1
+31,2,Jessie James Decker,12.0,14.0,1,0,True,0,1
+31,2,Teresa Giudice,14.0,15.0,0,1,True,0,1
+32,11,Ariana Madix,3.0,1.0,1,0,True,1,0
+32,11,Charity Lawson,3.0,2.0,1,1,True,1,0
+32,11,Alyson Hannigan,5.0,3.0,1,1,True,1,0
+32,11,Xochitl Gomez,1.0,4.0,0,1,True,0,1
+32,11,Jason Mraz,1.0,5.0,1,1,True,0,1
+33,9,Danny Amendola,5.0,1.0,1,1,True,1,0
+33,9,Ilona Maher,4.0,2.0,1,1,True,1,0
+33,9,Stephen Nedoroscik,2.0,4.0,1,1,True,0,1
+33,9,Chandler Kinney,1.0,5.0,1,1,True,0,1
+34,4,Andy Richter,11.0,11.0,1,1,True,0,0
+34,10,Elaine Hendrix,4.0,6.0,1,1,True,0,1
+34,11,Elaine Hendrix,5.0,1.0,1,1,True,1,0
+34,11,Dylan Efron,4.0,2.0,1,1,True,1,0
+34,11,Robert Irwin,2.0,4.0,1,1,True,0,1
+34,11,Alix Earle,1.0,5.0,1,1,True,0,1

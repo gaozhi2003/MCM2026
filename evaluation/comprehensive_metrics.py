@@ -229,29 +229,20 @@ def attack_robustness(long_df, method='percentage', n_attacks=100, attack_streng
 
 
 def consistency_analysis(long_df, method='percentage'):
-    """计算一致性指标：预测排名与实际淘汰排名(placement)的Spearman相关性"""
+    """计算一致性指标（按周）：每周预测排名与实际 placement 的 Spearman，各周取平均"""
     if 'placement' not in long_df.columns:
         return 0
 
     # 根据方法选择排名列
     if method == 'percentage':
-        # 百分比结合法：使用 combined_share_rank（值越小=综合得分越高=风险越低）
         if 'combined_share_rank' not in long_df.columns:
             return 0
         rank_col = 'combined_share_rank'
-        # placement 越大=淘汰越早=风险越高
-        # combined_share_rank 越大=综合得分越低=风险越高
-        # 应该正相关
     elif method == 'rank':
-        # 排名结合法：使用 combined_rank_final（值越小=综合排名越好=风险越低）
         if 'combined_rank_final' not in long_df.columns:
             return 0
         rank_col = 'combined_rank_final'
-        # placement 越大=淘汰越早=风险越高
-        # combined_rank_final 越大=综合排名越差=风险越高
-        # 应该正相关
     elif method == 'new':
-        # 新方法：使用 final_rank_alt（基于末尾两位+评委最低规则的排名）
         if 'final_rank_alt' not in long_df.columns:
             return 0
         rank_col = 'final_rank_alt'
@@ -268,13 +259,9 @@ def consistency_analysis(long_df, method='percentage'):
 
     for (season, week), group in data.groupby(['season', 'week']):
         if len(group) > 2:
-            # placement越大=淘汰越早=风险越高
-            # 预测排名越大=风险越高
             actual_rank = group['placement'].values
             pred_rank = group[rank_col].values
-
             try:
-                # 正相关表示：预测排名高的，实际也淘汰得早
                 corr, _ = stats.spearmanr(actual_rank, pred_rank)
                 if not np.isnan(corr):
                     spearman_scores.append(corr)
@@ -282,6 +269,167 @@ def consistency_analysis(long_df, method='percentage'):
                 continue
 
     return float(np.mean(spearman_scores)) if spearman_scores else 0
+
+
+def _ensure_exit_week(long_df):
+    """若缺少 exit_week 或全为 NaN，从 is_eliminated 推导：exit_week = 被淘汰的周，冠军用 max_week"""
+    has_valid = 'exit_week' in long_df.columns and long_df['exit_week'].notna().any()
+    if has_valid:
+        return long_df
+    if 'is_eliminated' not in long_df.columns:
+        return long_df
+    df = long_df.copy()
+    df = df.drop(columns=['exit_week'], errors='ignore')
+    elim = df[df['is_eliminated'] == 1][['season', 'celebrity_name', 'week']].drop_duplicates()
+    elim = elim.rename(columns={'week': 'exit_week'})
+    df = df.merge(elim, on=['season', 'celebrity_name'], how='left')
+    mw = df.groupby('season')['week'].max().reset_index(name='max_week')
+    df = df.merge(mw, on='season', how='left')
+    df['exit_week'] = df['exit_week'].fillna(0).astype(int)
+    df.loc[df['exit_week'] == 0, 'exit_week'] = df.loc[df['exit_week'] == 0, 'max_week'].astype(int)
+    return df
+
+
+def _compute_pred_final_rank_by_survival(long_df):
+    """按每人最后出现的 week + 同周得分计算预测最终排名（无并列）。
+
+    规则：
+    - 最后存活的 week 越大 → 排名越好（数字越小）
+    - 同周淘汰/退出的按当周 judge_total_score 排序，得分高排名好
+    - celebrity_name 作为最终 tiebreaker 保证无并列
+
+    返回：每人每季一行，含 pred_final_rank 列
+    """
+    need = ['placement', 'season', 'week', 'celebrity_name', 'judge_total_score']
+    if not all(c in long_df.columns for c in need):
+        return None
+
+    df = _ensure_exit_week(long_df.copy())
+    if 'exit_week' not in df.columns:
+        return None
+    if 'max_week' not in df.columns:
+        max_week_df = df.groupby('season')['week'].max().reset_index(name='max_week')
+        df = df.merge(max_week_df, on='season', how='left')
+    df['last_week'] = df.apply(
+        lambda r: int(r['exit_week']) if r['exit_week'] > 0 else int(r['max_week']),
+        axis=1
+    )
+
+    # 每人每季只保留最后一周
+    last = df[df['week'] == df['last_week']].drop_duplicates(
+        subset=['season', 'celebrity_name'], keep='first'
+    ).copy()
+
+    # 按赛季：last_week 降序（存活越久越好），judge_total_score 降序（同周得分高越好），celebrity_name 稳定无并列
+    pred_ranks = []
+    for season, grp in last.groupby('season'):
+        grp = grp.sort_values(
+            by=['last_week', 'judge_total_score', 'celebrity_name'],
+            ascending=[False, False, True]
+        ).reset_index(drop=True)
+        grp['pred_final_rank'] = np.arange(1, len(grp) + 1, dtype=int)
+        pred_ranks.append(grp[['season', 'celebrity_name', 'placement', 'pred_final_rank']])
+
+    if not pred_ranks:
+        return None
+    return pd.concat(pred_ranks, ignore_index=True)
+
+
+def _compute_all_methods_final_ranks(long_df):
+    """计算三种方法各自的预测最终排名 + 存活+得分规则，返回合并表。
+
+    每人取最后一周，按方法规则排序赋 rank：
+    - survival: last_week desc, judge_total_score desc
+    - percentage: last_week desc, combined_share_rank asc (1=best)
+    - rank: last_week desc, combined_rank_final asc
+    - new: last_week desc, final_rank_alt asc
+    """
+    survival_df = _compute_pred_final_rank_by_survival(long_df)
+    if survival_df is None:
+        return None
+
+    df = long_df.copy()
+    df = _ensure_exit_week(df)
+    if 'exit_week' not in df.columns:
+        return None
+    if 'max_week' not in df.columns:
+        df = df.merge(df.groupby('season')['week'].max().reset_index(name='max_week'), on='season', how='left')
+    df['last_week'] = df.apply(
+        lambda r: int(r['exit_week']) if r['exit_week'] > 0 else int(r['max_week']),
+        axis=1
+    )
+    last = df[df['week'] == df['last_week']].drop_duplicates(subset=['season', 'celebrity_name'], keep='first').copy()
+
+    result = survival_df[['season', 'celebrity_name', 'placement', 'pred_final_rank']].copy()
+    result = result.rename(columns={'pred_final_rank': 'pred_final_rank_survival'})
+
+    for out_col, sort_col in [
+        ('pred_final_rank_pct', 'combined_share_rank'),
+        ('pred_final_rank_rank', 'combined_rank_final'),
+        ('pred_final_rank_new', 'final_rank_alt'),
+    ]:
+        if sort_col not in last.columns:
+            result[out_col] = np.nan
+            continue
+        ranks_list = []
+        for season, grp in last.groupby('season'):
+            grp = grp.sort_values(
+                by=['last_week', sort_col, 'celebrity_name'],
+                ascending=[False, True, True]
+            ).reset_index(drop=True)
+            r = grp[['season', 'celebrity_name']].copy()
+            r[out_col] = np.arange(1, len(r) + 1, dtype=int)
+            ranks_list.append(r)
+        rank_df = pd.concat(ranks_list, ignore_index=True)
+        result = result.merge(rank_df, on=['season', 'celebrity_name'], how='left')
+
+    return result
+
+
+def consistency_val_from_table(rank_table, pred_col):
+    """从最终排名表计算某列与 placement 的 Spearman，按季取平均"""
+    if rank_table is None or pred_col not in rank_table.columns:
+        return np.nan
+    data = rank_table[['placement', pred_col, 'season']].dropna()
+    if len(data) == 0:
+        return np.nan
+    scores = []
+    for season, grp in data.groupby('season'):
+        if len(grp) > 2:
+            try:
+                c, _ = stats.spearmanr(grp['placement'].values, grp[pred_col].values)
+                if not np.isnan(c):
+                    scores.append(c)
+            except Exception:
+                pass
+    return float(np.mean(scores)) if scores else np.nan
+
+
+def consistency_final_rank(long_df, method=None):
+    """计算最终排名一致性：预测最终排名与 placement 的 Spearman 相关系数。
+
+    预测最终排名规则：
+    - 按每人最后出现的 week：last_week 越大（存活越久）排名越好
+    - 同周淘汰按当周 judge_total_score 排序，得分高排名好
+    - 无并列
+
+    method 参数保留兼容，本函数不再区分方法，统一使用上述规则。
+    """
+    data = _compute_pred_final_rank_by_survival(long_df)
+    if data is None or len(data) == 0:
+        return 0.0
+
+    spearman_scores = []
+    for season, group in data.groupby('season'):
+        if len(group) > 2:
+            try:
+                corr, _ = stats.spearmanr(group['placement'].values, group['pred_final_rank'].values)
+                if not np.isnan(corr):
+                    spearman_scores.append(corr)
+            except Exception:
+                continue
+
+    return float(np.mean(spearman_scores)) if spearman_scores else 0.0
 
 
 def comprehensive_evaluation(long_df, output_dir='data'):
@@ -347,8 +495,8 @@ def comprehensive_evaluation(long_df, output_dir='data'):
     )[0]
     print(f"  → {robust_winner} 更抗操纵（偏移率最低）")
     
-    # 3. 一致性
-    print("\n【3】一致性 (Consistency) - 与实际淘汰排名的Spearman相关系数")
+    # 3. 一致性（最终排名）
+    print("\n【3】一致性 (Consistency) - 预测最终排名与实际 placement 的 Spearman 相关系数")
     print("-" * 80)
     print("   定义: 预测风险分数与实际最终名次(placement)的相关性")
     print("   越高越好（表示预测排名与实际淘汰顺序越一致）\n")
@@ -356,20 +504,13 @@ def comprehensive_evaluation(long_df, output_dir='data'):
     percentage_consistency = consistency_analysis(long_df, method='percentage')
     rank_consistency = consistency_analysis(long_df, method='rank')
     new_consistency = consistency_analysis(long_df, method='new')
-    adaptive_consistency = consistency_analysis(long_df, method='adaptive')
     
     print(f"  百分比结合法Spearman相关系数: {percentage_consistency:.4f}")
     print(f"  排名结合法Spearman相关系数: {rank_consistency:.4f}")
     print(f"  新方法Spearman相关系数: {new_consistency:.4f}")
-    print(f"  动态权重法Spearman相关系数: {adaptive_consistency:.4f}")
     
     consistency_winner = max(
-        [
-            ('百分比结合法', percentage_consistency),
-            ('排名结合法', rank_consistency),
-            ('新方法', new_consistency),
-            ('动态权重法', adaptive_consistency),
-        ],
+        [('百分比结合法', percentage_consistency), ('排名结合法', rank_consistency), ('新方法', new_consistency)],
         key=lambda x: x[1]
     )[0]
     print(f"  → {consistency_winner} 一致性更好（相关系数最高）")
@@ -378,13 +519,20 @@ def comprehensive_evaluation(long_df, output_dir='data'):
     print("\n" + "=" * 80)
     print("综合评估总结")
     print("=" * 80)
-    
+
+    # 三种方法中取 Spearman 最高者（存活+得分仅作参考，不参与更优方法评选）
+    consistency_winner = max(
+        [('百分比结合法', consistency_pct if not np.isnan(consistency_pct) else -2),
+         ('排名结合法', consistency_rank if not np.isnan(consistency_rank) else -2),
+         ('新方法', consistency_new if not np.isnan(consistency_new) else -2)],
+        key=lambda x: x[1]
+    )[0]
+
     summary_data = {
         '指标': ['稳定性（翻转率）', '抗操纵性（偏移率）', '一致性（Spearman）'],
         '百分比结合法': [f'{percentage_flip:.6f}', f'{percentage_robust:.6f}', f'{percentage_consistency:.4f}'],
         '排名结合法': [f'{rank_flip:.6f}', f'{rank_robust:.6f}', f'{rank_consistency:.4f}'],
         '新方法': [f'{new_flip:.6f}', f'{new_robust:.6f}', f'{new_consistency:.4f}'],
-        '动态权重法': [f'{adaptive_flip:.6f}', f'{adaptive_robust:.6f}', f'{adaptive_consistency:.4f}'],
         '更优方法': [
             stability_winner,
             robust_winner,
@@ -403,7 +551,7 @@ def comprehensive_evaluation(long_df, output_dir='data'):
         pass
     
     return {
-        'stability': {'percentage': percentage_flip, 'rank': rank_flip, 'new': new_flip, 'adaptive': adaptive_flip},
-        'robustness': {'percentage': percentage_robust, 'rank': rank_robust, 'new': new_robust, 'adaptive': adaptive_robust},
-        'consistency': {'percentage': percentage_consistency, 'rank': rank_consistency, 'new': new_consistency, 'adaptive': adaptive_consistency},
+        'stability': {'percentage': percentage_flip, 'rank': rank_flip, 'new': new_flip},
+        'robustness': {'percentage': percentage_robust, 'rank': rank_robust, 'new': new_robust},
+        'consistency': {'percentage': percentage_consistency, 'rank': rank_consistency, 'new': new_consistency},
     }

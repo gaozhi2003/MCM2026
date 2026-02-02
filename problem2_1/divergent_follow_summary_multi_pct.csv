@@ -1,0 +1,13 @@
+﻿top_pct,pct_label,n_divergent_weeks,method,n_eliminated,n_fan_preferred,n_judge_preferred,ratio_fan_preferred
+0.05,前 5%,17,percentage,29,7,16,0.2414
+0.05,前 5%,17,ranking,29,12,10,0.4138
+0.1,前 10%,34,percentage,58,18,31,0.3103
+0.1,前 10%,34,ranking,58,24,24,0.4138
+0.15,前 15%,51,percentage,77,23,38,0.2987
+0.15,前 15%,51,ranking,77,30,28,0.3896
+0.2,前 20%,67,percentage,103,29,51,0.2816
+0.2,前 20%,67,ranking,103,37,40,0.3592
+0.25,前 25%,84,percentage,122,30,60,0.2459
+0.25,前 25%,84,ranking,122,39,46,0.3197
+0.3,前 30%,101,percentage,142,33,66,0.2324
+0.3,前 30%,101,ranking,142,42,51,0.2958

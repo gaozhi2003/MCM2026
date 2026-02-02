@@ -90,11 +90,22 @@ def _predict_new_from_scores_with_audience_rank(long_df):
     return preds
 
 
-def _predict_adaptive_method(long_df):
-    """动态权重方法：基于自适应权重的淘汰预测"""
-    adaptive_df = apply_adaptive_weight_method(long_df)
-    return adaptive_df["pred_eliminated_adaptive"]
-
+def _predict_new_from_scores_with_audience_share(long_df):
+    """百分比结合法 + Bottom 2 + 评委裁决：combined_share 最低的 max(2,n_elim) 位作为候选人，评委在候选人中淘汰得分最低者"""
+    preds = pd.Series(0, index=long_df.index, dtype=int)
+    for (season, week), group in long_df.groupby(['season', 'week']):
+        n_elim = int(group['is_eliminated'].sum())
+        if n_elim <= 0:
+            continue
+        if 'combined_share' not in group.columns:
+            continue
+        n_candidates = max(2, n_elim)
+        n_candidates = min(n_candidates, len(group))
+        candidate_idx = group.nsmallest(n_candidates, 'combined_share').index
+        candidates = group.loc[candidate_idx]
+        elim_idx = candidates.nsmallest(n_elim, 'judge_total_score').index
+        preds.loc[elim_idx] = 1
+    return preds
 
 
 def bootstrap_flip_rate(long_df, method='percentage', n_bootstrap=50, noise_level=0.05, random_state=42):
@@ -112,8 +123,8 @@ def bootstrap_flip_rate(long_df, method='percentage', n_bootstrap=50, noise_leve
         base_pred = _predict_rank_method(long_df).values
     elif method == 'new':
         base_pred = _predict_new_from_scores_with_audience_rank(long_df).values
-    elif method == 'adaptive':
-        base_pred = _predict_adaptive_method(long_df).values
+    elif method == 'new_pct':
+        base_pred = _predict_new_from_scores_with_audience_share(long_df).values
     else:
         return np.nan
     
@@ -152,8 +163,10 @@ def bootstrap_flip_rate(long_df, method='percentage', n_bootstrap=50, noise_leve
             noisy_pred = _predict_rank_method(noisy_df).values
         elif method == 'new':
             noisy_pred = _predict_new_from_scores_with_audience_rank(noisy_df).values
-        elif method == 'adaptive':
-            noisy_pred = _predict_adaptive_method(noisy_df).values
+        elif method == 'new_pct':
+            noisy_pred = _predict_new_from_scores_with_audience_share(noisy_df).values
+        else:
+            noisy_pred = base_pred
         
         total_flips += (base_pred != noisy_pred).sum()
     return total_flips / (len(base_pred) * n_bootstrap)
@@ -174,8 +187,8 @@ def attack_robustness(long_df, method='percentage', n_attacks=100, attack_streng
         base_pred = _predict_rank_method(long_df).values
     elif method == 'new':
         base_pred = _predict_new_from_scores_with_audience_rank(long_df).values
-    elif method == 'adaptive':
-        base_pred = _predict_adaptive_method(long_df).values
+    elif method == 'new_pct':
+        base_pred = _predict_new_from_scores_with_audience_share(long_df).values
     else:
         return np.nan
     
@@ -221,8 +234,10 @@ def attack_robustness(long_df, method='percentage', n_attacks=100, attack_streng
             attacked_pred = _predict_rank_method(attacked).values
         elif method == 'new':
             attacked_pred = _predict_new_from_scores_with_audience_rank(attacked).values
-        elif method == 'adaptive':
-            attacked_pred = _predict_adaptive_method(attacked).values
+        elif method == 'new_pct':
+            attacked_pred = _predict_new_from_scores_with_audience_share(attacked).values
+        else:
+            attacked_pred = base_pred
         
         change_rates.append((attacked_pred != base_pred).mean())
     return float(np.mean(change_rates))
@@ -246,11 +261,10 @@ def consistency_analysis(long_df, method='percentage'):
         if 'final_rank_alt' not in long_df.columns:
             return 0
         rank_col = 'final_rank_alt'
-    elif method == 'adaptive':
-        # 动态权重方法：使用 adaptive_rank
-        if 'adaptive_rank' not in long_df.columns:
+    elif method == 'new_pct':
+        if 'final_rank_alt_pct' not in long_df.columns:
             return 0
-        rank_col = 'adaptive_rank'
+        rank_col = 'final_rank_alt_pct'
     else:
         return 0
 
@@ -367,6 +381,7 @@ def _compute_all_methods_final_ranks(long_df):
         ('pred_final_rank_pct', 'combined_share_rank'),
         ('pred_final_rank_rank', 'combined_rank_final'),
         ('pred_final_rank_new', 'final_rank_alt'),
+        ('pred_final_rank_new_pct', 'final_rank_alt_pct'),
     ]:
         if sort_col not in last.columns:
             result[out_col] = np.nan
@@ -450,22 +465,19 @@ def comprehensive_evaluation(long_df, output_dir='data'):
     percentage_flip = bootstrap_flip_rate(long_df, method='percentage', n_bootstrap=50, noise_level=0.05)
     rank_flip = bootstrap_flip_rate(long_df, method='rank', n_bootstrap=50, noise_level=0.05)
     new_flip = bootstrap_flip_rate(long_df, method='new', n_bootstrap=50, noise_level=0.05)
-    adaptive_flip = bootstrap_flip_rate(long_df, method='adaptive', n_bootstrap=50, noise_level=0.05)
+    new_pct_flip = bootstrap_flip_rate(long_df, method='new_pct', n_bootstrap=50, noise_level=0.05)
     
-    print(f"  百分比结合法翻转率: {percentage_flip:.6f}")
-    print(f"  排名结合法翻转率: {rank_flip:.6f}")
-    print(f"  新方法翻转率: {new_flip:.6f}")
-    print(f"  动态权重法翻转率: {adaptive_flip:.6f}")
+    print(f"  百分比结合法翻转率:     {percentage_flip:.6f}")
+    print(f"  排名结合法翻转率:     {rank_flip:.6f}")
+    print(f"  排名+Bottom2翻转率:   {new_flip:.6f}")
+    print(f"  份额+Bottom2翻转率:   {new_pct_flip:.6f}")
     
-    stability_winner = min(
-        [
-            ('百分比结合法', percentage_flip),
-            ('排名结合法', rank_flip),
-            ('新方法', new_flip),
-            ('动态权重法', adaptive_flip),
-        ],
-        key=lambda x: x[1]
-    )[0]
+    methods_stability = [
+        ('百分比结合法', percentage_flip), ('排名结合法', rank_flip),
+        ('排名+Bottom2', new_flip), ('份额+Bottom2', new_pct_flip)
+    ]
+    stability_winner = min(methods_stability, key=lambda x: x[1])[0]
+>>>>>>> 69fc835 (第二问的四种方法)
     print(f"  → {stability_winner} 更稳定（翻转率最低）")
     
     # 2. 抗操纵性
@@ -477,67 +489,68 @@ def comprehensive_evaluation(long_df, output_dir='data'):
     percentage_robust = attack_robustness(long_df, method='percentage', n_attacks=100)
     rank_robust = attack_robustness(long_df, method='rank', n_attacks=100)
     new_robust = attack_robustness(long_df, method='new', n_attacks=100)
-    adaptive_robust = attack_robustness(long_df, method='adaptive', n_attacks=100)
+    new_pct_robust = attack_robustness(long_df, method='new_pct', n_attacks=100)
     
-    print(f"  百分比结合法结果偏移率: {percentage_robust:.6f}")
-    print(f"  排名结合法结果偏移率: {rank_robust:.6f}")
-    print(f"  新方法结果偏移率: {new_robust:.6f}")
-    print(f"  动态权重法结果偏移率: {adaptive_robust:.6f}")
+    print(f"  百分比结合法结果偏移率:     {percentage_robust:.6f}")
+    print(f"  排名结合法结果偏移率:     {rank_robust:.6f}")
+    print(f"  排名+Bottom2结果偏移率:   {new_robust:.6f}")
+    print(f"  份额+Bottom2结果偏移率:   {new_pct_robust:.6f}")
     
-    robust_winner = min(
-        [
-            ('百分比结合法', percentage_robust),
-            ('排名结合法', rank_robust),
-            ('新方法', new_robust),
-            ('动态权重法', adaptive_robust),
-        ],
-        key=lambda x: x[1]
-    )[0]
+    methods_robust = [
+        ('百分比结合法', percentage_robust), ('排名结合法', rank_robust),
+        ('排名+Bottom2', new_robust), ('份额+Bottom2', new_pct_robust)
+    ]
+    robust_winner = min(methods_robust, key=lambda x: x[1])[0]
+>>>>>>> 69fc835 (第二问的四种方法)
     print(f"  → {robust_winner} 更抗操纵（偏移率最低）")
     
     # 3. 一致性（最终排名）
     print("\n【3】一致性 (Consistency) - 预测最终排名与实际 placement 的 Spearman 相关系数")
     print("-" * 80)
-    print("   定义: 预测风险分数与实际最终名次(placement)的相关性")
-    print("   越高越好（表示预测排名与实际淘汰顺序越一致）\n")
-    
-    percentage_consistency = consistency_analysis(long_df, method='percentage')
-    rank_consistency = consistency_analysis(long_df, method='rank')
-    new_consistency = consistency_analysis(long_df, method='new')
-    
-    print(f"  百分比结合法Spearman相关系数: {percentage_consistency:.4f}")
-    print(f"  排名结合法Spearman相关系数: {rank_consistency:.4f}")
-    print(f"  新方法Spearman相关系数: {new_consistency:.4f}")
-    
-    consistency_winner = max(
-        [('百分比结合法', percentage_consistency), ('排名结合法', rank_consistency), ('新方法', new_consistency)],
-        key=lambda x: x[1]
-    )[0]
-    print(f"  → {consistency_winner} 一致性更好（相关系数最高）")
-    
+    print("   每人取最后一周，按 last_week 降序 + 方法内 tiebreaker 赋预测最终排名")
+    print("   按赛季计算 Spearman，各季取平均；越高越好\n")
+
+    rank_table = _compute_all_methods_final_ranks(long_df)
+    consistency_survival = consistency_final_rank(long_df)
+    consistency_pct = consistency_val_from_table(rank_table, 'pred_final_rank_pct') if rank_table is not None else np.nan
+    consistency_rank = consistency_val_from_table(rank_table, 'pred_final_rank_rank') if rank_table is not None else np.nan
+    consistency_new = consistency_val_from_table(rank_table, 'pred_final_rank_new') if rank_table is not None else np.nan
+    consistency_new_pct = consistency_val_from_table(rank_table, 'pred_final_rank_new_pct') if rank_table is not None else np.nan
+
+    print(f"  存活+得分规则 Spearman: {consistency_survival:.4f}")
+    print(f"  百分比结合法 Spearman:  {consistency_pct:.4f}" if not np.isnan(consistency_pct) else "  百分比结合法: N/A (缺少 combined_share_rank)")
+    print(f"  排名结合法 Spearman:    {consistency_rank:.4f}" if not np.isnan(consistency_rank) else "  排名结合法: N/A (缺少 combined_rank_final)")
+    print(f"  排名+Bottom2 Spearman:  {consistency_new:.4f}" if not np.isnan(consistency_new) else "  排名+Bottom2: N/A (缺少 final_rank_alt)")
+    print(f"  份额+Bottom2 Spearman:  {consistency_new_pct:.4f}" if not np.isnan(consistency_new_pct) else "  份额+Bottom2: N/A (缺少 final_rank_alt_pct)")
+
+    if rank_table is not None:
+        try:
+            out_path = output_dir / 'final_rank_comparison.csv'
+            rank_table.to_csv(out_path, index=False, encoding='utf-8-sig')
+            print(f"\n  ✓ [已导出] 四种算法最终排名 vs 真实排名: {out_path}")
+        except Exception:
+            pass
+
     # 总结
     print("\n" + "=" * 80)
     print("综合评估总结")
     print("=" * 80)
 
-    # 三种方法中取 Spearman 最高者（存活+得分仅作参考，不参与更优方法评选）
-    consistency_winner = max(
-        [('百分比结合法', consistency_pct if not np.isnan(consistency_pct) else -2),
-         ('排名结合法', consistency_rank if not np.isnan(consistency_rank) else -2),
-         ('新方法', consistency_new if not np.isnan(consistency_new) else -2)],
-        key=lambda x: x[1]
-    )[0]
+    methods_consistency = [
+        ('百分比结合法', consistency_pct if not np.isnan(consistency_pct) else -2),
+        ('排名结合法', consistency_rank if not np.isnan(consistency_rank) else -2),
+        ('排名+Bottom2', consistency_new if not np.isnan(consistency_new) else -2),
+        ('份额+Bottom2', consistency_new_pct if not np.isnan(consistency_new_pct) else -2),
+    ]
+    consistency_winner = max(methods_consistency, key=lambda x: x[1])[0]
 
     summary_data = {
-        '指标': ['稳定性（翻转率）', '抗操纵性（偏移率）', '一致性（Spearman）'],
-        '百分比结合法': [f'{percentage_flip:.6f}', f'{percentage_robust:.6f}', f'{percentage_consistency:.4f}'],
-        '排名结合法': [f'{rank_flip:.6f}', f'{rank_robust:.6f}', f'{rank_consistency:.4f}'],
-        '新方法': [f'{new_flip:.6f}', f'{new_robust:.6f}', f'{new_consistency:.4f}'],
-        '更优方法': [
-            stability_winner,
-            robust_winner,
-            consistency_winner
-        ]
+        '指标': ['稳定性（翻转率）', '抗操纵性（偏移率）', '一致性（最终排名 Spearman）'],
+        '百分比结合法': [f'{percentage_flip:.6f}', f'{percentage_robust:.6f}', f'{consistency_pct:.4f}' if not np.isnan(consistency_pct) else 'N/A'],
+        '排名结合法': [f'{rank_flip:.6f}', f'{rank_robust:.6f}', f'{consistency_rank:.4f}' if not np.isnan(consistency_rank) else 'N/A'],
+        '排名+Bottom2': [f'{new_flip:.6f}', f'{new_robust:.6f}', f'{consistency_new:.4f}' if not np.isnan(consistency_new) else 'N/A'],
+        '份额+Bottom2': [f'{new_pct_flip:.6f}', f'{new_pct_robust:.6f}', f'{consistency_new_pct:.4f}' if not np.isnan(consistency_new_pct) else 'N/A'],
+        '更优方法': [stability_winner, robust_winner, consistency_winner]
     }
     
     summary_df = pd.DataFrame(summary_data)
@@ -551,7 +564,14 @@ def comprehensive_evaluation(long_df, output_dir='data'):
         pass
     
     return {
-        'stability': {'percentage': percentage_flip, 'rank': rank_flip, 'new': new_flip},
-        'robustness': {'percentage': percentage_robust, 'rank': rank_robust, 'new': new_robust},
-        'consistency': {'percentage': percentage_consistency, 'rank': rank_consistency, 'new': new_consistency},
+        'stability': {'percentage': percentage_flip, 'rank': rank_flip, 'new': new_flip, 'new_pct': new_pct_flip},
+        'robustness': {'percentage': percentage_robust, 'rank': rank_robust, 'new': new_robust, 'new_pct': new_pct_robust},
+        'consistency': {
+            'survival': consistency_survival,
+            'percentage': consistency_pct,
+            'rank': consistency_rank,
+            'new': consistency_new,
+            'new_pct': consistency_new_pct,
+        },
+        'final_rank_table': rank_table,
     }

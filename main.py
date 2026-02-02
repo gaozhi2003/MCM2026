@@ -534,14 +534,13 @@ def main(export_only_three_csvs=False, output_dir=None):
     else:
         print("[排名结合法] 无排名差异>=2的案例")
 
-    # ========== 新方法：末尾两位 + 评委最低 ==========
-    print("\n=== 新方法：末尾两位 + 评委最低 ===")
+    # ========== 新淘汰机制：Bottom 2 + 评委裁决 ==========
+    # 可搭配两种结合方法：排名法（已有）、百分比法（新增）
+
+    print("\n=== 新淘汰机制：Bottom 2 + 评委裁决 ===")
 
     def mark_eliminated_by_bottom2_then_judge(group):
-        """观众排名+评委排名相加，取最大的候选，再按评委评分淘汰最低者
-        
-        多淘汰周处理：候选人数量为 max(2, n_elim)
-        """
+        """排名结合法 + Bottom 2 + 评委裁决：观众排名+评委排名相加，取最大的候选，再按评委评分淘汰最低者"""
         n_elim = int(group["n_eliminated"].iloc[0])
         group = group.copy()
         group["pred_eliminated_alt"] = 0
@@ -549,30 +548,50 @@ def main(export_only_three_csvs=False, output_dir=None):
         # 综合排名分数 = 观众排名 + 评委排名（值越大越靠后）
         group["combined_rank_score"] = group["audience_rank"] + group["judge_rank"]
         
-        # 初始化排名（暂时设为None，最后只设置被淘汰者）
         group["final_rank_alt"] = group["combined_rank_score"].rank(ascending=True, method="min")
         
         if n_elim == 0:
             return group
         
-        # 取综合排名分数最大的 max(2, n_elim) 位作为候选人
-        # 确保候选人数量至少为2，且不少于需要淘汰的人数
         n_candidates = max(2, n_elim)
-        n_candidates = min(n_candidates, len(group))  # 不能超过总人数
+        n_candidates = min(n_candidates, len(group))
         candidate_idx = group.nlargest(n_candidates, "combined_rank_score").index
         candidates = group.loc[candidate_idx]
-
-        # 从候选人中按评委评分最低者淘汰（若要淘汰多人，则取最低的 n_elim 人）
         elim_idx = candidates.nsmallest(n_elim, "judge_total_score").index
         group.loc[elim_idx, "pred_eliminated_alt"] = 1
-        
-        # 被淘汰者排名设为该周最差名次（即总人数）
         worst_rank = len(group)
         group.loc[elim_idx, "final_rank_alt"] = worst_rank
+        return group
+
+    def mark_eliminated_by_bottom2_then_judge_share(group):
+        """百分比结合法 + Bottom 2 + 评委裁决：综合份额最低的候选，再按评委评分淘汰最低者
         
+        combined_share 越低越危险，取份额最低的 max(2, n_elim) 位作为候选人，评委在候选人中淘汰得分最低者
+        """
+        n_elim = int(group["n_eliminated"].iloc[0])
+        group = group.copy()
+        group["pred_eliminated_alt_pct"] = 0
+        
+        # 综合份额越高越好，combined_share 越低越危险
+        # 按 combined_share 升序排序，最小的为最危险
+        group["final_rank_alt_pct"] = group["combined_share"].rank(ascending=False, method="min")  # 份额高→排名好
+        
+        if n_elim == 0:
+            return group
+        
+        n_candidates = max(2, n_elim)
+        n_candidates = min(n_candidates, len(group))
+        # 取 combined_share 最小的 n_candidates 位作为候选人（份额低=危险）
+        candidate_idx = group.nsmallest(n_candidates, "combined_share").index
+        candidates = group.loc[candidate_idx]
+        elim_idx = candidates.nsmallest(n_elim, "judge_total_score").index
+        group.loc[elim_idx, "pred_eliminated_alt_pct"] = 1
+        worst_rank = len(group)
+        group.loc[elim_idx, "final_rank_alt_pct"] = worst_rank
         return group
 
     long_df = long_df.groupby(["season", "week"], group_keys=False).apply(mark_eliminated_by_bottom2_then_judge)
+    long_df = long_df.groupby(["season", "week"], group_keys=False).apply(mark_eliminated_by_bottom2_then_judge_share)
 
     # 新方法整体准确率
     alt_accuracy = (long_df["pred_eliminated_alt"] == long_df["is_eliminated"]).mean()
@@ -633,43 +652,29 @@ def main(export_only_three_csvs=False, output_dir=None):
     new_rank_path = base_export_dir / "new_method_rankings.csv"
     try:
         new_rank_df.to_csv(new_rank_path, index=False, encoding="utf-8-sig")
-        print(f"[已导出] 新方法排名表: {new_rank_path}")
+        print(f"[已导出] 新方法排名表（排名+Bottom2）: {new_rank_path}")
     except Exception as e:
         print(f"[错误] 导出新方法排名表失败: {e}")
 
-    # ========== 动态权重方法（自适应阶段权重） ==========
-    print("\n=== 动态权重方法：自适应阶段权重 ===")
+    # 导出百分比+Bottom2+评委裁决排名表
+    new_rank_pct_cols = [
+        "season", "week", "celebrity_name",
+        "judge_share", "audience_share", "combined_share",
+        "final_rank_alt_pct", "pred_eliminated_alt_pct", "judge_total_score"
+    ]
+    new_rank_pct_df = long_df[new_rank_pct_cols].copy()
+    new_rank_pct_df = new_rank_pct_df.sort_values(["season", "week", "final_rank_alt_pct", "judge_share"]).reset_index(drop=True)
+    new_rank_pct_path = base_export_dir / "new_method_rankings_pct.csv"
     try:
-        adaptive_df = apply_adaptive_weight_method(long_df)
-        long_df = adaptive_df  # 更新主表以便后续评估使用 adaptive_rank
-
-        adaptive_cols = [
-            "season", "week", "celebrity_name",
-            "weight_audience", "weight_judge", "combined_score_adaptive",
-            "adaptive_rank", "pred_eliminated_adaptive", "judge_total_score"
-        ]
-        adaptive_rank_df = long_df[adaptive_cols].copy()
-        adaptive_rank_df = adaptive_rank_df.sort_values(
-            ["season", "week", "adaptive_rank", "judge_total_score"],
-            ascending=[True, True, True, True]
-        ).reset_index(drop=True)
-
-        adaptive_rank_path = project_root / "data" / "adaptive_weight_method_rankings.csv"
-        adaptive_rank_df.to_csv(adaptive_rank_path, index=False, encoding="utf-8-sig")
-        print(f"[已导出] 动态权重法排名表: {adaptive_rank_path}")
+        new_rank_pct_df.to_csv(new_rank_pct_path, index=False, encoding="utf-8-sig")
+        print(f"[已导出] 新方法排名表（百分比+Bottom2）: {new_rank_pct_path}")
     except Exception as e:
-        print(f"[错误] 动态权重法计算或导出失败: {e}")
+        print(f"[错误] 导出百分比+Bottom2排名表失败: {e}")
 
-    # ========== 无监督指标评估（不依赖真实淘汰标签） ==========
-    print("\n=== 无监督指标评估：四种方法对比 ===")
-    try:
-        unsupervised_df = compare_methods(long_df)
-        unsupervised_path = project_root / "data" / "metric_unsupervised_comparison.csv"
-        unsupervised_df.to_csv(unsupervised_path, index=False, encoding="utf-8-sig")
-        print(f"[已导出] 无监督指标对比表: {unsupervised_path}")
-    except Exception as e:
-        print(f"[错误] 无监督指标评估失败: {e}")
-    
+    if export_only_three_csvs:
+        print("\n[完成] 四种方法排名表已导出，已退出（跳过后续评估等步骤）")
+        return
+
     # ========== 三类指标综合评估 ==========
     print("\n" + "=" * 70)
     print("【综合评估】四种方法对比 - 稳定性、抗操纵性、一致性")

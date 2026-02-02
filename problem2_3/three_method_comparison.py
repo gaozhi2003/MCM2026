@@ -1,16 +1,18 @@
 """
-问题二（3）：三种方法综合对比
+问题二（3）：四种方法综合对比
 
-对比百分比结合法、排名结合法、新方法（末尾两位+评委最低）在以下三个指标上的表现：
-1. 稳定性（Bootstrap 翻转率）
-2. 抗操纵性（攻击偏移率）
-3. 一致性（Spearman 相关系数）
+对比四种方法在以下三个指标上的表现：
+1. 百分比结合法、排名结合法（直接淘汰末位）
+2. 排名+Bottom2+评委裁决、份额+Bottom2+评委裁决
+
+指标：稳定性（Bootstrap 翻转率）、抗操纵性（攻击偏移率）、一致性（Spearman 相关系数）
 
 依赖：需先运行 main.py 生成以下数据文件：
   - weekly_shares.csv
   - percentage_method_rankings.csv
   - ranking_method_rankings.csv
   - new_method_rankings.csv
+  - new_method_rankings_pct.csv
   - cleaned_data1.csv（或能提供 placement、is_eliminated 的长表）
 """
 
@@ -30,6 +32,7 @@ WEEKLY_SHARES_PATH = DATA_DIR / "weekly_shares.csv"
 PERCENTAGE_RANKINGS_PATH = DATA_DIR / "percentage_method_rankings.csv"
 RANKING_RANKINGS_PATH = DATA_DIR / "ranking_method_rankings.csv"
 NEW_METHOD_RANKINGS_PATH = DATA_DIR / "new_method_rankings.csv"
+NEW_METHOD_RANKINGS_PCT_PATH = DATA_DIR / "new_method_rankings_pct.csv"
 CLEANED_LONG_PATH = DATA_DIR / "cleaned_data1.csv"
 
 
@@ -47,6 +50,15 @@ def build_long_df_for_evaluation():
         on=["season", "week", "celebrity_name"],
         how="left",
     )
+
+    # 合并 份额+Bottom2 的 final_rank_alt_pct
+    if NEW_METHOD_RANKINGS_PCT_PATH.exists():
+        new_pct = pd.read_csv(NEW_METHOD_RANKINGS_PCT_PATH)
+        df = df.merge(
+            new_pct[["season", "week", "celebrity_name", "final_rank_alt_pct"]],
+            on=["season", "week", "celebrity_name"],
+            how="left",
+        )
 
     # 合并 percentage 的 combined_share_rank
     pct = pd.read_csv(PERCENTAGE_RANKINGS_PATH)
@@ -94,7 +106,7 @@ def build_long_df_for_evaluation():
 
 def main():
     print("=" * 60)
-    print("问题二（3）：三种方法综合对比")
+    print("问题二（3）：四种方法综合对比")
     print("=" * 60)
 
     # 检查数据文件
@@ -103,6 +115,7 @@ def main():
         PERCENTAGE_RANKINGS_PATH,
         RANKING_RANKINGS_PATH,
         NEW_METHOD_RANKINGS_PATH,
+        NEW_METHOD_RANKINGS_PCT_PATH,
     ]
     missing = [p for p in required if not p.exists()]
     if missing:
@@ -115,8 +128,7 @@ def main():
     print("\n[1] 加载并合并数据...")
     long_df = build_long_df_for_evaluation()
 
-    # 若 cleaned_data1 不存在，is_eliminated 需从实际淘汰结果来；new_method 的 pred_eliminated_alt 是预测值
-    # comprehensive_metrics 用 is_eliminated 表示「该周实际淘汰人数」和「谁被淘汰」
+    # 若 cleaned_data1 不存在，is_eliminated 需从实际淘汰结果来
     if "is_eliminated" not in long_df.columns or long_df["is_eliminated"].isna().all():
         print("[警告] 缺少 is_eliminated，将使用 pred_eliminated_alt 作为近似")
         long_df["is_eliminated"] = long_df.get("pred_eliminated_alt", 0)
@@ -126,7 +138,7 @@ def main():
     print(f"  合并后记录数: {len(long_df)}")
 
     # 调用综合评估
-    print("\n[2] 计算三种方法的稳定性、抗操纵性、一致性...")
+    print("\n[2] 计算四种方法的稳定性、抗操纵性、一致性...")
     from evaluation.comprehensive_metrics import comprehensive_evaluation
 
     result = comprehensive_evaluation(long_df, output_dir=str(OUT_DIR))

@@ -1,16 +1,17 @@
 """
-问题二：针对 10 个争议案例，用与 three_method_comparison 相同的逻辑计算三种方法结果并对比
+问题二：针对 10 个争议案例，用与 three_method_comparison 相同的逻辑计算四种方法结果并对比
 
-三种方法：
-  (i)  全份额（百分比法）：按 combined_share 排名
-  (ii) 全排名（排名法）：按 judge_rank + audience_rank 综合排名
-  (iii) Bottom 2 + 评委裁决：综合分数倒数两名候选，评委分数最低者淘汰
+四种方法：
+  (i)   全份额（百分比法）：按 combined_share 排名，直接淘汰末位
+  (ii)  全排名（排名法）：按 judge_rank + audience_rank 综合排名，直接淘汰末位
+  (iii) 排名 + Bottom 2 + 评委裁决：综合排名倒数两名候选，评委分数最低者淘汰
+  (iv)  份额 + Bottom 2 + 评委裁决：综合份额最低两名候选，评委分数最低者淘汰
 
-本脚本：构建 long_df → 调用 _compute_all_methods_final_ranks 计算三种方法的预测最终名次
+本脚本：构建 long_df → 调用 _compute_all_methods_final_ranks 计算四种方法的预测最终名次
        → 筛选 10 个争议案例 → 输出对比表
 
 依赖：main.py 已生成 percentage_method_rankings, ranking_method_rankings, new_method_rankings,
-     weekly_shares, cleaned_data1
+     new_method_rankings_pct, weekly_shares, cleaned_data1
 """
 
 import sys
@@ -28,11 +29,12 @@ WEEKLY_SHARES_PATH = DATA_DIR / "weekly_shares.csv"
 PERCENTAGE_RANKINGS_PATH = DATA_DIR / "percentage_method_rankings.csv"
 RANKING_RANKINGS_PATH = DATA_DIR / "ranking_method_rankings.csv"
 NEW_METHOD_RANKINGS_PATH = DATA_DIR / "new_method_rankings.csv"
+NEW_METHOD_RANKINGS_PCT_PATH = DATA_DIR / "new_method_rankings_pct.csv"
 CLEANED_PATH = DATA_DIR / "cleaned_data1.csv"
 
 
 def build_long_df():
-    """与 three_method_comparison 相同：从数据文件合并构建 long_df"""
+    """从数据文件合并构建 long_df，包含四种方法的周级排名"""
     import pandas as pd
 
     base = pd.read_csv(NEW_METHOD_RANKINGS_PATH)
@@ -42,6 +44,14 @@ def build_long_df():
         on=["season", "week", "celebrity_name"],
         how="left",
     )
+    # 百分比 + Bottom 2 的周级排名
+    if NEW_METHOD_RANKINGS_PCT_PATH.exists():
+        new_pct = pd.read_csv(NEW_METHOD_RANKINGS_PCT_PATH)
+        df = df.merge(
+            new_pct[["season", "week", "celebrity_name", "final_rank_alt_pct"]],
+            on=["season", "week", "celebrity_name"],
+            how="left",
+        )
     pct = pd.read_csv(PERCENTAGE_RANKINGS_PATH)
     pct = pct.rename(columns={"final_rank": "combined_share_rank"})
     df = df.merge(
@@ -78,7 +88,7 @@ def main():
     from evaluation.comprehensive_metrics import _compute_all_methods_final_ranks
 
     print("=" * 70)
-    print("问题二：10 个争议案例 — 三种结合方法结果对比（按评估逻辑计算）")
+    print("问题二：10 个争议案例 — 四种方法结果对比（按评估逻辑计算）")
     print("=" * 70)
 
     if not CONTROVERSY_PATH.exists():
@@ -89,69 +99,80 @@ def main():
         (PERCENTAGE_RANKINGS_PATH, "percentage_method_rankings.csv"),
         (RANKING_RANKINGS_PATH, "ranking_method_rankings.csv"),
         (NEW_METHOD_RANKINGS_PATH, "new_method_rankings.csv"),
+        (NEW_METHOD_RANKINGS_PCT_PATH, "new_method_rankings_pct.csv"),
         (CLEANED_PATH, "cleaned_data1.csv"),
     ]:
         if not p.exists():
             print(f"[错误] 缺少 {name}，请先运行 main.py")
             return
 
-    print("\n[1] 构建 long_df（合并三种方法数据）...")
+    print("\n[1] 构建 long_df（合并四种方法数据）...")
     long_df = build_long_df()
     if "is_eliminated" not in long_df.columns or long_df["is_eliminated"].isna().all():
         long_df["is_eliminated"] = long_df.get("pred_eliminated_alt", 0)
     print(f"    记录数: {len(long_df)}")
 
-    print("\n[2] 计算三种方法的预测最终名次...")
+    print("\n[2] 计算四种方法的预测最终名次...")
     rank_table = _compute_all_methods_final_ranks(long_df)
     if rank_table is None:
-        print("[错误] 无法计算三种方法最终排名")
+        print("[错误] 无法计算四种方法最终排名")
         return
+
+    rank_cols = ["pred_final_rank_pct", "pred_final_rank_rank", "pred_final_rank_new", "pred_final_rank_new_pct"]
+    rank_cols = [c for c in rank_cols if c in rank_table.columns]
 
     controversy = pd.read_csv(CONTROVERSY_PATH)
     merge_cols = ["season", "celebrity_name"]
-    # 合并前去掉 controversy 的 placement，避免与 rank_table 的 placement 冲突产生 _x/_y 后缀
     controversy_sub = controversy.drop(columns=["placement"], errors="ignore")
     df = controversy_sub.merge(
-        rank_table[merge_cols + ["placement", "pred_final_rank_pct", "pred_final_rank_rank", "pred_final_rank_new"]],
+        rank_table[merge_cols + ["placement"] + rank_cols],
         on=merge_cols,
         how="inner",
     )
 
-    df = df.rename(columns={
+    rename_map = {
         "placement": "实际名次",
         "pred_final_rank_pct": "全份额法",
         "pred_final_rank_rank": "全排名法",
-        "pred_final_rank_new": "Bottom2+评委",
-    })
+        "pred_final_rank_new": "排名+Bottom2",
+        "pred_final_rank_new_pct": "份额+Bottom2",
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
-    df["三法一致"] = (
-        (df["全份额法"] == df["全排名法"]) &
-        (df["全排名法"] == df["Bottom2+评委"])
-    )
-    df["与实际一致"] = (
-        (df["全份额法"] == df["实际名次"]) &
-        (df["全排名法"] == df["实际名次"]) &
-        (df["Bottom2+评委"] == df["实际名次"])
+    # 四法一致：四种方法结果完全相同
+    method_cols = [rename_map[c] for c in rank_cols if c in rename_map]
+    if len(method_cols) >= 2:
+        df["四法一致"] = df[method_cols].apply(lambda row: row.nunique() == 1, axis=1)
+    else:
+        df["四法一致"] = True
+    df["与实际一致"] = df.apply(
+        lambda r: all(r.get(c) == r["实际名次"] for c in method_cols if c in r),
+        axis=1
     )
 
     out_path = OUT_DIR / "controversy_three_methods_comparison.csv"
     df.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"\n[输出] {out_path.name}")
 
-    print("\n--- 10 个争议案例在三种方法下的最终名次 ---")
-    disp = df[["season", "celebrity_name", "实际名次", "全份额法", "全排名法", "Bottom2+评委", "三法一致", "与实际一致"]]
-    print(disp.to_string(index=False))
+    disp_cols = ["season", "celebrity_name", "实际名次"] + method_cols + ["四法一致", "与实际一致"]
+    disp_cols = [c for c in disp_cols if c in df.columns]
+    print("\n--- 10 个争议案例在四种方法下的最终名次 ---")
+    print(df[disp_cols].to_string(index=False))
 
-    n_same_all = df["三法一致"].sum()
+    n_same_all = df["四法一致"].sum()
     n_match_actual = df["与实际一致"].sum()
-    print(f"\n三法结果完全一致: {n_same_all}/10")
-    print(f"三法均与实际名次一致: {n_match_actual}/10")
+    print(f"\n四法结果完全一致: {n_same_all}/10")
+    print(f"四法均与实际名次一致: {n_match_actual}/10")
 
-    diff_cases = df[~df["三法一致"]]
+    diff_cases = df[~df["四法一致"]]
     if len(diff_cases) > 0:
-        print("\n--- 三种方法结果存在差异的案例 ---")
+        print("\n--- 四种方法结果存在差异的案例 ---")
         for _, r in diff_cases.iterrows():
-            print(f"  S{r['season']} {r['celebrity_name']}: 实际={r['实际名次']}, 全份额={r['全份额法']}, 全排名={r['全排名法']}, Bottom2+评委={r['Bottom2+评委']}")
+            parts = [f"实际={r['实际名次']}"]
+            for c in method_cols:
+                if c in r:
+                    parts.append(f"{c}={r[c]}")
+            print(f"  S{r['season']} {r['celebrity_name']}: " + ", ".join(parts))
 
     print("\n完成。")
 

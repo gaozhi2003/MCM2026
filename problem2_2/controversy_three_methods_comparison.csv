@@ -1,0 +1,11 @@
+﻿season,celebrity_name,n_weeks_participated,low_judge_safe_weeks,low_judge_safe_pct,实际名次,全份额法,全排名法,Bottom2+评委,三法一致,与实际一致
+1,Kelly Monaco,6,5,0.8333333333333334,1,2,2,1,False,False
+3,Jerry Springer,7,5,0.7142857142857143,5,5,5,5,True,True
+11,Bristol Palin,10,7,0.7,3,3,3,2,False,False
+17,Bill Engvall,11,6,0.5454545454545454,4,4,4,3,False,False
+32,Alyson Hannigan,11,6,0.5454545454545454,5,5,5,2,False,False
+24,David Ross,10,5,0.5,2,3,3,2,False,False
+2,Jerry Rice,8,4,0.5,2,3,3,3,True,False
+4,Billy Ray Cyrus,8,4,0.5,5,5,5,5,True,True
+14,Melissa Gilbert,8,4,0.5,5,6,6,6,True,False
+27,Bobby Bones,9,4,0.4444444444444444,1,4,4,3,False,False

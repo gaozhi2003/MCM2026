@@ -66,10 +66,17 @@ class _TeeStdout:
             s.flush()
 
 
-def main():
-    """主程序"""
+def main(export_only_three_csvs=False, output_dir=None):
+    """主程序
+    
+    Args:
+        export_only_three_csvs: 若为 True，运行至三种方法排名表导出后即退出
+        output_dir: 导出目录，None 时使用 data/
+    """
+    base_export_dir = Path(output_dir) if output_dir else project_root / 'data'
     print("=" * 60)
-    print("MCM 问题 C 数据分析模型")
+    title = "MCM 问题 C - 仅导出三种方法排名表" if export_only_three_csvs else "MCM 问题 C 数据分析模型"
+    print(title)
     print("=" * 60)
     
     # 1. 数据加载
@@ -410,9 +417,10 @@ def main():
     share_rank_df = share_rank_df.sort_values(["season", "week", "final_rank", "judge_rank"]).reset_index(drop=True)
     rank_rank_df = rank_rank_df.sort_values(["season", "week", "final_rank", "judge_rank"]).reset_index(drop=True)
 
-    share_rank_path = project_root / "data" / "percentage_method_rankings.csv"
-    rank_rank_path = project_root / "data" / "ranking_method_rankings.csv"
+    share_rank_path = base_export_dir / "percentage_method_rankings.csv"
+    rank_rank_path = base_export_dir / "ranking_method_rankings.csv"
     try:
+        base_export_dir.mkdir(parents=True, exist_ok=True)
         share_rank_df.to_csv(share_rank_path, index=False, encoding="utf-8-sig")
         rank_rank_df.to_csv(rank_rank_path, index=False, encoding="utf-8-sig")
         print(f"[已导出] 百分比结合法排名表: {share_rank_path}")
@@ -423,7 +431,7 @@ def main():
         print(f"[错误] 导出排名表失败: {e}")
 
     # 周级份额表：观众份额、评委份额、总体份额（供作图与“是否更偏观众”分析）
-    weekly_shares_path = project_root / "data" / "weekly_shares.csv"
+    weekly_shares_path = base_export_dir / "weekly_shares.csv"
     weekly_shares_df = long_df[
         ["season", "week", "celebrity_name", "judge_share", "audience_share", "combined_share"]
     ].sort_values(["season", "week", "celebrity_name"]).reset_index(drop=True)
@@ -589,13 +597,17 @@ def main():
     ]
     new_rank_df = long_df[new_rank_cols].copy()
     new_rank_df = new_rank_df.sort_values(["season", "week", "final_rank_alt", "judge_rank"]).reset_index(drop=True)
-    new_rank_path = project_root / "data" / "new_method_rankings.csv"
+    new_rank_path = base_export_dir / "new_method_rankings.csv"
     try:
         new_rank_df.to_csv(new_rank_path, index=False, encoding="utf-8-sig")
         print(f"[已导出] 新方法排名表: {new_rank_path}")
     except Exception as e:
         print(f"[错误] 导出新方法排名表失败: {e}")
-    
+
+    if export_only_three_csvs:
+        print("\n[完成] 三种方法排名表已导出，已退出（跳过后续评估等步骤）")
+        return
+
     # ========== 三类指标综合评估 ==========
     print("\n" + "=" * 70)
     print("【综合评估】新旧方法对比 - 稳定性、抗操纵性、一致性")
@@ -852,4 +864,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    export_only = "--export-three-csvs-only" in sys.argv
+    out_dir = None
+    for i, a in enumerate(sys.argv):
+        if a == "--output-dir" and i + 1 < len(sys.argv):
+            out_dir = sys.argv[i + 1]
+            break
+    main(export_only_three_csvs=export_only, output_dir=out_dir)

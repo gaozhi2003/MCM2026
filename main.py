@@ -45,6 +45,8 @@ from evaluation.consistency import (
     analyze_boundary_margin_distribution
 )
 from evaluation.comprehensive_metrics import comprehensive_evaluation
+from evaluation.adaptive_weight_method import apply_adaptive_weight_method
+from evaluation.unsupervised_metrics import compare_methods
 from evaluation.uncertainty import (
     weekly_uncertainty,
     analyze_vote_share_intervals,
@@ -279,18 +281,49 @@ def main():
     # 反推观众投票比例：audience_share = estimated_combined_share - judge_share
     long_df["audience_share_raw"] = long_df["estimated_combined_share"] - long_df["judge_share"]
     
-    def normalize_audience_share(raw_series):
+    def normalize_negative_share(raw_series):
+    # 1. 提取原始值，转为数组
         raw = raw_series.values
-        # 平移使最小值为0
-        shifted = raw - raw.min()
-        total = shifted.sum()
-        if total > 1e-10:
-            return shifted / total
+        # 2. 核心处理：负数→0，NaN→0（投票份额的业务硬约束）
+        processed = np.where(np.isnan(raw) | (raw < 0), 0.0, raw)
+        # 3. 计算组内总和，定义浮点精度阈值（避免除0）
+        total = processed.sum()
+        eps = 1e-10
+        n = len(processed)
+        
+        # 4. 分组归一化，处理边缘场景
+        if total > eps:
+            # 正常情况：处理后的值 / 组内总和，保证和为1，保留相对差异
+            normalized = processed / total
+        elif n == 1:
+            # 单选手组：直接赋值1，符合业务逻辑
+            normalized = np.ones(n)
         else:
-            # 如果全0，则均匀分配
-            return np.ones(len(raw)) / len(raw)
+            # 全0组（全负/全NaN）：均匀分配份额，兜底无意义数据
+            normalized = np.ones(n) / n
     
-    long_df["audience_share"] = long_df.groupby(["season", "week"])["audience_share_raw"].transform(normalize_audience_share)
+        return normalized
+    
+    long_df["audience_share"] = long_df.groupby(["season", "week"])["audience_share_raw"].transform(normalize_negative_share)
+
+    # 导出观众投票份额（按赛季-周）
+    audience_share_cols = [
+        "season", "week", "celebrity_name",
+        "audience_share", "audience_share_raw"
+    ]
+    audience_share_df = long_df[audience_share_cols].copy()
+    audience_share_df = audience_share_df.sort_values([
+        "season", "week", "audience_share"
+    ], ascending=[True, True, False]).reset_index(drop=True)
+
+    audience_share_path = project_root / "data" / "audience_share_by_week.csv"
+    try:
+        audience_share_df.to_csv(audience_share_path, index=False, encoding="utf-8-sig")
+        print(f"[已导出] 观众投票份额表: {audience_share_path}")
+    except PermissionError:
+        print(f"[警告] 无法写入观众投票份额表（文件被占用）")
+    except Exception as e:
+        print(f"[错误] 导出观众投票份额表失败: {e}")
     
     # 排名法：先计算评委排名（1为最高分）
     long_df["judge_rank"] = long_df.groupby(["season", "week"])["judge_total_score"].rank(
@@ -562,10 +595,43 @@ def main():
         print(f"[已导出] 新方法排名表: {new_rank_path}")
     except Exception as e:
         print(f"[错误] 导出新方法排名表失败: {e}")
+
+    # ========== 动态权重方法（自适应阶段权重） ==========
+    print("\n=== 动态权重方法：自适应阶段权重 ===")
+    try:
+        adaptive_df = apply_adaptive_weight_method(long_df)
+        long_df = adaptive_df  # 更新主表以便后续评估使用 adaptive_rank
+
+        adaptive_cols = [
+            "season", "week", "celebrity_name",
+            "weight_audience", "weight_judge", "combined_score_adaptive",
+            "adaptive_rank", "pred_eliminated_adaptive", "judge_total_score"
+        ]
+        adaptive_rank_df = long_df[adaptive_cols].copy()
+        adaptive_rank_df = adaptive_rank_df.sort_values(
+            ["season", "week", "adaptive_rank", "judge_total_score"],
+            ascending=[True, True, True, True]
+        ).reset_index(drop=True)
+
+        adaptive_rank_path = project_root / "data" / "adaptive_weight_method_rankings.csv"
+        adaptive_rank_df.to_csv(adaptive_rank_path, index=False, encoding="utf-8-sig")
+        print(f"[已导出] 动态权重法排名表: {adaptive_rank_path}")
+    except Exception as e:
+        print(f"[错误] 动态权重法计算或导出失败: {e}")
+
+    # ========== 无监督指标评估（不依赖真实淘汰标签） ==========
+    print("\n=== 无监督指标评估：四种方法对比 ===")
+    try:
+        unsupervised_df = compare_methods(long_df)
+        unsupervised_path = project_root / "data" / "metric_unsupervised_comparison.csv"
+        unsupervised_df.to_csv(unsupervised_path, index=False, encoding="utf-8-sig")
+        print(f"[已导出] 无监督指标对比表: {unsupervised_path}")
+    except Exception as e:
+        print(f"[错误] 无监督指标评估失败: {e}")
     
     # ========== 三类指标综合评估 ==========
     print("\n" + "=" * 70)
-    print("【综合评估】新旧方法对比 - 稳定性、抗操纵性、一致性")
+    print("【综合评估】四种方法对比 - 稳定性、抗操纵性、一致性")
     print("=" * 70)
     
     metrics_result = comprehensive_evaluation(long_df, output_dir=str(project_root / 'data'))
